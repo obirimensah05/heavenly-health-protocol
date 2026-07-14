@@ -10,8 +10,12 @@ from heavenly_health.health_storage import (
     SupabaseHealthStore,
     SupabaseSettings,
 )
-from heavenly_health.providers.common import MemorySecretStore, ProviderStateStore
-from heavenly_health.providers.google_health import GoogleOAuthClient
+from heavenly_health.providers.common import (
+    MemorySecretStore,
+    ProviderConfigurationError,
+    ProviderStateStore,
+)
+from heavenly_health.providers.google_health import GoogleClientCredentials, GoogleOAuthClient
 from heavenly_health.providers.runtime import ProviderRuntime
 
 
@@ -204,6 +208,41 @@ def test_provider_runtime_connects_google_and_persists_only_pseudonymous_state(
     saved = state.load("google_health")
     assert saved["identity_hash"] != "private-google-identity"
     assert "private-google-identity" not in repr(saved)
+
+
+def test_provider_runtime_turns_loopback_failure_into_safe_operator_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from heavenly_health.providers.oauth_loopback import OAuthCallbackError
+
+    secrets = MemorySecretStore()
+    credentials = GoogleClientCredentials.from_payload(
+        {
+            "web": {
+                "client_id": "client.apps.googleusercontent.com",
+                "client_secret": "client-secret",
+                "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [
+                    "http://127.0.0.1:8791/providers/google-health/oauth/callback"
+                ],
+            }
+        }
+    )
+    secrets.set(GoogleOAuthClient.SERVICE, GoogleOAuthClient.CLIENT_ACCOUNT, credentials.to_json())
+    runtime = ProviderRuntime(
+        secret_store=secrets,
+        state_store=ProviderStateStore(tmp_path / "providers"),
+    )
+
+    def fail(**_kwargs):
+        raise OAuthCallbackError("OAuth loopback port is unavailable; stop the local MCP first")
+
+    monkeypatch.setattr("heavenly_health.providers.runtime.receive_oauth_callback", fail)
+
+    with pytest.raises(ProviderConfigurationError, match="loopback port is unavailable"):
+        runtime.connect_google(frozenset({"steps"}))
 
 
 def test_provider_runtime_dispatches_garmin_connector(monkeypatch, tmp_path) -> None:
