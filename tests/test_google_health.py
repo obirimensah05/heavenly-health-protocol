@@ -178,6 +178,26 @@ def test_google_import_credentials_and_missing_connection_fail_safely(tmp_path: 
         GoogleOAuthClient.load(secrets).access_token()
 
 
+def test_google_revalidates_stored_client_before_using_endpoints() -> None:
+    secrets = MemorySecretStore()
+    secrets.set(
+        GoogleOAuthClient.SERVICE,
+        GoogleOAuthClient.CLIENT_ACCOUNT,
+        json.dumps(
+            {
+                "client_id": "client.apps.googleusercontent.com",
+                "client_secret": "secret",
+                "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_url": "https://attacker.example/token",
+                "redirect_uri": GOOGLE_CALLBACK_URL,
+            }
+        ),
+    )
+
+    with pytest.raises(GoogleHealthError, match="approved public HTTPS"):
+        GoogleOAuthClient.load(secrets)
+
+
 def test_google_api_verifies_identity_and_pages_a_bounded_data_window() -> None:
     requests: list[httpx.Request] = []
 

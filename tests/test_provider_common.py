@@ -64,6 +64,28 @@ def test_oauth_token_rejects_malformed_stored_json() -> None:
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        {"access_token": "", "expires_at": "2026-07-14T13:00:00Z"},
+        {"access_token": "token", "expires_at": "not-a-date"},
+        {
+            "access_token": "token",
+            "expires_at": "2026-07-14T13:00:00Z",
+            "token_type": "MAC",
+        },
+        {
+            "access_token": "token",
+            "expires_at": "2026-07-14T13:00:00Z",
+            "scopes": {"invalid": True},
+        },
+    ],
+)
+def test_oauth_token_rejects_malformed_stored_fields(payload) -> None:
+    with pytest.raises(ProviderConfigurationError, match="Stored provider token"):
+        OAuthToken.from_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize(
     "url",
     [
         "http://api.example.com/token",
