@@ -178,6 +178,38 @@ def test_connector_status_reports_real_freshness_without_returning_health_values
     assert "value_numeric" not in json.dumps(result)
 
 
+def test_connector_status_and_sync_include_attached_google_and_garmin_runtime() -> None:
+    class ProviderRuntime:
+        def __init__(self):
+            self.calls = []
+
+        def statuses(self):
+            return [
+                {"source": "google_health", "connected": True, "sync_supported": True},
+                {"source": "garmin", "connected": True, "sync_supported": True},
+            ]
+
+        def sync(self, source, store, *, limit):
+            self.calls.append((source, store, limit))
+            return {"source": source, "status": "completed"}
+
+    runtime = ProviderRuntime()
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=[]))
+    )
+    store = SupabaseHealthStore(settings(), http_client=client, provider_runtime=runtime)
+
+    status = store.connector_status()
+    synced = store.sync_source("google_health", limit=10)
+
+    assert [item["source"] for item in status["configured_connectors"]][-2:] == [
+        "google_health",
+        "garmin",
+    ]
+    assert synced == {"source": "google_health", "status": "completed"}
+    assert runtime.calls == [("google_health", store, 10)]
+
+
 def test_normalizer_is_idempotent_allowlisted_and_drops_source_device_names() -> None:
     delivery = {
         "id": "00000000-0000-4000-8000-000000000010",
