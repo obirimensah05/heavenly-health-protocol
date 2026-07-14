@@ -58,14 +58,35 @@ most people never need them.
 | --- | --- |
 | Apple Watch / iPhone via Apple Health + Health Auto Export | ✅ Works today |
 | Fitbit / Pixel Watch via the Google Health API v4 | ✅ Works today |
+| WHOOP | ✅ Works today — data needs an active WHOOP membership |
+| Oura | ✅ Works today |
 | Garmin via Garmin Connect | ✅ Built — requires Garmin Developer Program approval |
 | Data you already keep in Supabase | ✅ Works today |
-| WHOOP | 🔜 Planned (security spec ready) |
-| Oura | 🔜 Planned (security spec ready) |
 | Android Health Connect | 🔜 Planned (spec ready) |
 
 Choosing a planned source still completes onboarding — your choice is recorded
 and nothing has to be redone when its adapter ships.
+
+### Signing in to WHOOP or Oura
+
+Both take about two minutes and follow the same pattern:
+
+1. Create a (free) developer app on the provider's site — [WHOOP](https://developer.whoop.com)
+   or [Oura](https://cloud.ouraring.com/oauth/applications) — and note its
+   client ID, client secret, and the redirect URL you register.
+2. Put those four lines in an owner-only env file
+   (`~/.config/heavenly/whoop.env` or `oura.env` — exact keys in
+   [docs/providers](docs/providers/README.md)).
+3. Sign in with your normal account:
+
+```bash
+heavenly provider whoop import-client ~/.config/heavenly/whoop.env
+heavenly provider whoop connect     # browser opens; paste the redirected URL back
+heavenly provider whoop sync
+```
+
+(Swap `whoop` for `oura` for an Oura Ring.) Your sign-in tokens are stored in
+the operating-system credential vault — never in files, your notes, or Git.
 
 ## How it stays private
 
