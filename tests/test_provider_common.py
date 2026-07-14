@@ -7,6 +7,7 @@ import stat
 import pytest
 
 from heavenly_health.providers.common import (
+    KeyringSecretStore,
     MemorySecretStore,
     OAuthToken,
     ProviderConfigurationError,
@@ -63,6 +64,30 @@ def test_memory_secret_store_never_serializes_values() -> None:
     assert store.get("google-health", "token") is None
 
 
+def test_keyring_secret_store_wraps_backend_without_leaking_values() -> None:
+    class Backend:
+        def __init__(self):
+            self.values = {}
+
+        def get_password(self, service, account):
+            return self.values.get((service, account))
+
+        def set_password(self, service, account, value):
+            self.values[(service, account)] = value
+
+        def delete_password(self, service, account):
+            self.values.pop((service, account), None)
+
+    backend = Backend()
+    store = KeyringSecretStore(backend=backend)
+    store.set("google-health", "token", "keychain-secret")
+
+    assert store.get("google-health", "token") == "keychain-secret"
+    assert "keychain-secret" not in repr(store)
+    store.delete("google-health", "token")
+    assert store.get("google-health", "token") is None
+
+
 def test_provider_state_is_owner_only_atomic_and_rejects_secret_fields(tmp_path) -> None:
     root = tmp_path / "providers"
     store = ProviderStateStore(root)
@@ -86,4 +111,3 @@ def test_provider_state_is_owner_only_atomic_and_rejects_secret_fields(tmp_path)
 
     store.delete("google_health")
     assert store.load("google_health") == {}
-
