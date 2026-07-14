@@ -1,8 +1,10 @@
 # Connect Google Health API v4 securely
 
-> **Current status:** manual provider walkthrough and connector specification.
-> The checked-in Heavenly CLI does not yet import the client, run the Google
-> callback, refresh tokens, or synchronize Google Health data.
+> **Current status:** implemented native connector. Heavenly imports a protected
+> Google Web OAuth client into the operating-system credential vault, runs an
+> exact one-shot loopback callback with state and PKCE, refreshes/revokes tokens,
+> and performs bounded paginated Google Health API v4 synchronization into the
+> existing raw-provenance and allowlisted normalized tables.
 
 Use this route for supported Fitbit/Google Health data linked to the user's Google account. This is the **Google Health API v4** at `health.googleapis.com/v4`, not Google Fit, the legacy Fitbit Web API, Android Health Connect, or Google Cloud Healthcare API. The Google Health API is the new consumer API; Health Connect remains device-local, and Cloud Healthcare API is for clinical FHIR/DICOM workloads.
 
@@ -13,11 +15,15 @@ Use this route for supported Fitbit/Google Health data linked to the user's Goog
 - Google Health API enabled and a **Web application / Web server** OAuth client.
 - OAuth consent/branding, public privacy policy and terms appropriate for restricted health scopes.
 - For Testing, the authorizing account explicitly listed as a test user.
-- A local callback listener on port 8791 for this walkthrough.
+- A configured Heavenly Supabase route and explicit metric allowlist.
+- Port 8791 available temporarily for the one-shot local callback.
 
 All Google Health API scopes are Restricted. Moving the consent screen to In Production avoids Testing's short refresh-token lifetime, but **publishing status and Google verification are separate**. Do not claim verified/approved access merely because the app says In Production. Complete the current Google verification, privacy, security, and launch requirements before serving users beyond the allowed test/limited audience.
 
-Heavenly may auto-detect the Supabase CLI, `cloudflared`, compatible MCP clients, and supported Google/cloud APIs. It only inspects availability. Every project/API, consent-screen, database, tunnel, or remote-access change is previewed and requires user approval. Local OAuth needs no tunnel.
+Heavenly does not create or modify the Google Cloud project. The operator creates
+the project/client in Google, downloads the Web OAuth JSON, and imports it with a
+local command. Local provider OAuth needs no tunnel and the AI/MCP client never
+receives the Google client secret or tokens.
 
 ## 2. Supported data and exact scopes
 
@@ -58,30 +64,25 @@ Google's current codelab/setup wizard may temporarily instruct developers to use
 
 Download the Web OAuth client JSON from Google Cloud. It is a secret-bearing file.
 
-### Native macOS
+The connector is native. Put the downloaded file outside the repository, make it
+owner-only, then import it by absolute path:
 
-1. Leave the file in Downloads only long enough for Heavenly's interactive import.
-2. Select it through the setup file picker/local prompt; verify the metadata preview says Web client and shows the expected project/product without printing the secret.
-3. Heavenly imports client credentials and tokens into macOS Keychain, then asks approval before deleting the downloaded copy. Do not move it into the repository or paste its contents.
-4. If manual cleanup is chosen, ensure the file is owner-readable only while present and remove it after successful Keychain import.
+```bash
+chmod 600 "/absolute/path/to/google-oauth-client.json"
+heavenly provider google-health import-client "/absolute/path/to/google-oauth-client.json"
+```
+
+The command validates a Web client, Google's official OAuth origins, and the
+exact callback before copying the client into the operating-system credential
+vault. It prints only redacted status. Heavenly does not automatically delete
+the downloaded file; remove it after a successful import if it is no longer
+needed.
 
 Non-secret scope, expiry, identity alias, and checkpoint metadata may live in Heavenly's state directory; refresh/access tokens do not.
 
-### Docker/server
-
-Use this exact owner-only host path:
-
-```text
-~/.config/heavenly/secrets/google-health/client.json
-```
-
-Set mode `0600`, keep the parent directory owner-only, and mount the file read-only at:
-
-```text
-/run/secrets/google-health-client.json
-```
-
-The container must read that runtime secret and must not copy it into an image layer, named volume, logs, `.env`, Compose YAML, backup export, or database. Store user refresh tokens in encrypted server-side token storage with the encryption key supplied separately by the deployment secret manager.
+The checked-in Docker MCP profile intentionally does not receive provider
+credentials and cannot run this connector. Use native Heavenly for provider
+OAuth and synchronization.
 
 ## 5. Authorize for offline access
 
@@ -95,12 +96,18 @@ redirect_uri=http://127.0.0.1:8791/providers/google-health/oauth/callback
 
 Use `prompt=consent` only for the **initial** connection, recovery when a refresh token is missing/revoked, or explicit scope expansion. Do not send it on routine sign-in or refresh; repeated forced consent creates unnecessary grants/tokens and user friction.
 
-1. Start the loopback listener and generate high-entropy, one-time `state` (and PKCE if supported by the client implementation).
-2. Open Google's authorization page with the selected scopes, `access_type=offline`, and initial `prompt=consent`.
-3. Confirm the account is the one linked to Fitbit/Google Health and review the exact scope list.
-4. The callback validates `state`, rejects replay/expiry, and exchanges the one-time code server-side.
-5. Store access token, refresh token, granted scopes, and expiry atomically. Never log the callback URL/code or token response.
-6. Refresh without `prompt=consent`; serialize refresh per connection and retain the prior refresh token if Google returns no replacement.
+Stop the local MCP while the one-shot callback uses port 8791, then connect:
+
+```bash
+heavenly runtime stop --runtime native
+heavenly provider google-health connect
+```
+
+Heavenly selects scopes from `HEAVENLY_ALLOWED_METRICS`, opens Google's consent
+page, validates state and PKCE, exchanges the code without logging it, validates
+the Google Health identity, and stores the token set in the credential vault.
+The initial flow requests offline access and consent; refreshes retain the prior
+refresh token when Google does not rotate it.
 
 ### Testing versus Production
 
@@ -111,20 +118,29 @@ Use `prompt=consent` only for the **initial** connection, recovery when a refres
 
 First call an identity endpoint under `users/me`/the Google Health user context (for example the API's user identity resource), then a narrow data read. Do not request People API/profile scopes merely to obtain an email.
 
-Verification sequence:
+Run the first bounded synchronization, inspect redacted status, and restart MCP:
 
-1. Call the v4 user identity endpoint and persist only its stable, pseudonymized subject/connection binding.
-2. Confirm API base/version is `https://health.googleapis.com/v4/`.
-3. Query one selected data type in a narrow recent interval, such as `steps`, `sleep`, or `heart-rate`, and page results.
-4. Validate native resource name/ID, data source, timestamps/offset, units, and granted scope before normalization.
+```bash
+heavenly provider google-health sync --limit 1000
+heavenly provider status
+heavenly runtime start --runtime native
+heavenly runtime status
+```
 
-Expected result:
+The connector calls `/v4/users/me/identity`, stores only a SHA-256 identity
+binding in local state, reads mapped data types for the most recent bounded
+window, follows pagination, saves each raw record before normalized events, and
+commits checkpoints only after storage succeeds. The MCP
+`health_connector_status` and `health_sync_source` tools can then report or
+trigger the same provider runtime without exposing credentials or raw payloads.
+
+Expected command result:
 
 ```text
 Google Health connection verified
 API: v4
 Identity: stable users/me binding recorded (email and tokens not stored in events)
-Scopes: 3 read-only scopes granted
+Scopes: only the read-only scopes required by the configured metric allowlist
 Read: API succeeded; records imported or a valid empty window reported
 ```
 
@@ -137,7 +153,8 @@ If identity succeeds but reads are empty, confirm that the same Google account i
 - Store immutable raw resources under `google-health:{data_type}:{native_resource_id}`. If no stable ID exists, hash canonical provider, connection pseudonym, type, original timestamps, value, and unit. Derive normalized metric IDs from the raw ID.
 - Upsert on stable IDs. Overlap polling windows to catch delayed/revised sync without duplicates. Preserve data source/provenance.
 - Fitbit/device → Google cloud sync and computed daily metrics may lag. Record `data_through`; missing is unknown, not zero. If the device or Heavenly is offline, resume from the durable checkpoint with overlap after reconnect.
-- Add Google Health notifications/webhooks only after a provider-aware receiver exists, the initial backfill works, and external subscription creation has been previewed and approved. Notifications trigger authoritative refetch; they are not a reason to expose a local callback publicly.
+- Notifications/webhooks are not implemented. The connector uses explicit
+  bounded pull synchronization with a one-hour checkpoint overlap.
 
 ## 8. Troubleshooting
 
@@ -155,12 +172,17 @@ If identity succeeds but reads are empty, confirm that the same Google account i
 
 ## 9. Revoke and delete
 
-1. Pause polling, refresh, notification, and backfill jobs.
-2. Revoke the grant from the user's Google Account third-party connections/security controls and, where supported, call Google's token revocation endpoint through Heavenly without exposing the token in a command line.
-3. Delete Keychain/encrypted token entries, pending state, identity mapping, and notification subscriptions. Delete the host client JSON only if the OAuth client is no longer needed by any approved connection; otherwise retain it at `0600`.
-4. Optionally delete/rotate the OAuth client in Google Cloud only after preview and explicit approval; this affects every user of that client.
-5. Offer separate deletion of normalized data, restricted immutable raw data, analyses, checkpoints, and backups under the published retention policy. Keep only a non-sensitive deletion audit marker.
-6. Verify refresh/read fail and jobs cannot recreate the connection. Reconnection requires new consent, and deleted history is not reimported unless the user requests a new backfill.
+1. Stop active synchronization and run `heavenly provider google-health
+   disconnect --yes`. Add `--remove-client` only when the reusable OAuth client
+   should also leave the credential vault.
+2. Heavenly calls Google's revocation endpoint without putting the token on the
+   command line, deletes the local token and connector state, and optionally
+   removes the client.
+3. Delete the downloaded JSON if retained. Optionally delete/rotate the OAuth
+   client in Google Cloud; this affects every user of that client.
+4. Provider disconnect intentionally does not delete already ingested raw or
+   normalized records. Apply the owner's separate data-retention/deletion policy
+   when historical rows and backups must also be removed.
 
 ## Official references
 

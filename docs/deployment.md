@@ -13,10 +13,11 @@ heavenly runtime install-service  # persistent macOS user service
 ```
 
 The package is not published to a public package index. `setup --preview` is a
-design preview; interactive provider/storage setup is not implemented. The
-runtime starts status-only MCP when no storage adapter is configured. Local
-credentials belong in the operating-system secret store or an owner-only runtime
-file outside Git. Local MCP clients do not need a public URL.
+design preview; storage and Cloudflare setup remain operator-driven. Google
+Health and Garmin have real provider lifecycle commands under `heavenly
+provider`. The runtime starts status-only MCP when no storage adapter is
+configured. Local credentials belong in the operating-system secret store or an
+owner-only runtime file outside Git. Local MCP clients do not need a public URL.
 
 The native launcher optionally reads `~/.config/heavenly/runtime.env`. The file
 must be absolute, regular, owned by the current user, and mode `0600`; symlinks,
@@ -37,6 +38,13 @@ HEAVENLY_HEALTH_TABLE=heavenly_health_events
 HEAVENLY_RAW_HEALTH_TABLE=heavenly_health_raw_events
 HEAVENLY_ALLOWED_METRICS=steps,resting_heart_rate,sleep_analysis
 ```
+
+The native provider connectors reuse this explicit allowlist. Configure storage
+first, then follow [Google Health](providers/google-health.md) or
+[Garmin](providers/garmin.md). During `provider ... connect`, stop the native MCP
+so the exact one-shot loopback callback can bind `127.0.0.1:8791`; restart it
+after the initial sync. The checked-in Docker profile remains status-only and
+does not receive provider credentials.
 
 Table and column settings accept safe identifiers only. The Supabase endpoint must
 be a public HTTPS origin, and credentials are redacted from representations and
@@ -68,10 +76,9 @@ Docker is optional and intended for technical users, a Mac mini/home server, or 
 - a read-only root filesystem, temporary `/tmp`, dropped Linux capabilities, and no-new-privileges;
 
 It does not provide OAuth secret injection, separate local/remote Compose
-profiles, provider synchronization, or the future full Heavenly worker runtime.
-The checked-in Compose file is therefore for the local status-only MCP service,
-not a production remote OAuth deployment. Do not put OAuth credentials in
-committed `.env` files.
+profiles, or provider synchronization. The checked-in Compose file is therefore
+for the local status-only MCP service, not a production remote OAuth deployment.
+Do not put OAuth credentials in committed `.env` files.
 
 The separate `heavenly agent run` command can launch any CLI-agent image in a
 default-deny container. It is independent from the MCP service container; see

@@ -7,15 +7,22 @@ advanced infrastructure come only when the selected route requires them.
 
 ### 1. Choose an implemented data route
 
-Version 0.1 supports existing normalized Supabase data and bounded
-normalization from a configured Health Auto Export delivery table. Apply the
+The current release supports existing normalized Supabase data, bounded
+normalization from a configured Health Auto Export delivery table, Google
+Health API v4, and approved Garmin Connect Health API integrations. Apply the
 checked-in migrations, select only the required metrics, and keep the Supabase
 service-role credential in an owner-only runtime file.
 
-WHOOP, Oura, Google Health/Fitbit, Garmin, and Health Connect documents describe
-the security and provider contracts for future adapters. The CLI must not claim
-that those OAuth or sync implementations exist until their code and live tests
-ship.
+WHOOP, Oura, and Health Connect documents remain security and provider contracts
+for future adapters. Google Health is implemented for native use. Garmin's
+adapter is implemented, but a live connection still requires approval and the
+OAuth/API configuration issued inside Garmin's Developer Program.
+
+For Google Health or Garmin, configure Supabase first, stop the native MCP while
+the one-shot OAuth callback owns port 8791, run the provider import/connect/sync
+commands, and restart the service. Provider credentials and tokens remain in the
+operating-system credential vault; only redacted state and synchronization
+checkpoints are stored under Heavenly's owner-only state directory.
 
 ### 2. Start the native service
 

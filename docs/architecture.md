@@ -2,9 +2,10 @@
 
 > **Status:** partially implemented data architecture. The repository includes
 > schema migrations, native/Docker MCP runtimes, a Supabase adapter, Health Auto
-> Export normalization, bounded health/context tools, owner-approved mutations,
-> Cloudflare Managed OAuth, and the generic agent sandbox. Additional provider
-> adapters, scheduling, summaries, and delivery remain target architecture.
+> Export normalization, native Google Health and Garmin provider adapters,
+> bounded health/context tools, owner-approved mutations, Cloudflare Managed
+> OAuth, and the generic agent sandbox. Additional provider adapters,
+> scheduling, summaries, and delivery remain target architecture.
 
 ```text
 Selected device/provider
@@ -17,7 +18,12 @@ Selected device/provider
 
 ## Source adapters
 
-Source adapters own provider OAuth, webhook/polling, refresh, revocation, and source capability declarations. Credentials remain in platform secret storage or a hosted secret manager.
+Source adapters own provider OAuth, polling, refresh, revocation, and source
+capability declarations. The implemented Google Health and Garmin adapters use
+an exact loopback callback, PKCE/state, bounded overlap-safe pull windows,
+provider-native identities, and the operating-system credential vault. Garmin
+endpoint and resource paths are partner-issued configuration because its full
+reference is available only after program approval.
 
 ## Normalized data
 
@@ -44,7 +50,8 @@ configures Heavenly's service-side adapter.
 
 - Obsidian/local: raw exports, daily Markdown, local SQLite import state.
 - Supabase: implemented fixed-relation REST adapter with bounded reads,
-  provenance, Health Auto Export normalization, context search, and approved writes.
+  raw provider provenance, Health Auto Export/Google Health/Garmin normalization,
+  context search, and approved writes.
 - iCloud/Google Drive: user-controlled file destination plus local import state.
 
 ## MCP access

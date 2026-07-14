@@ -7,13 +7,14 @@ compatible Model Context Protocol client.
 
 Heavenly provides a tested native MCP service, an optional hardened Docker
 runtime, a bounded Supabase health-data adapter, Health Auto Export
-normalization, private context search, owner-approved mutations, and an optional
-Cloudflare Managed OAuth boundary for remote clients.
+normalization, native Google Health API v4 and Garmin partner connectors,
+private context search, owner-approved mutations, and an optional Cloudflare
+Managed OAuth boundary for remote clients.
 
 The normal path is deliberately short:
 
-1. Put normalized health data in your own Supabase project, either directly or
-   through the implemented Health Auto Export delivery-table adapter.
+1. Put health data in your own Supabase project directly, through Health Auto
+   Export, or through an implemented native provider connector.
 2. Start Heavenly natively.
 3. Give your AI/MCP client the local MCP URL or your OAuth-protected remote URL.
 4. Let the client perform OAuth. Cloudflare Managed OAuth supports Dynamic
@@ -71,18 +72,24 @@ operator setup.
 
 The repository separates implemented adapters from reviewed provider designs:
 
-| Source | Version 0.1 status |
+| Source | Status |
 | --- | --- |
 | Existing normalized Supabase data | Implemented |
 | Apple Health through a Health Auto Export delivery table | Implemented bounded normalization/sync |
+| Fitbit / Google Health API v4 | Implemented native OAuth, refresh/revoke, bounded pull sync, provenance, and normalization |
+| Garmin Connect Health API | Implemented partner-configurable native OAuth and bounded pull sync; live use requires Garmin approval and partner-issued API details |
 | WHOOP | Security and onboarding specification; OAuth/sync adapter not yet implemented |
 | Oura | Security and onboarding specification; OAuth/sync adapter not yet implemented |
-| Fitbit / Google Health API | Security and onboarding specification; OAuth/sync adapter not yet implemented |
-| Garmin | Guided Developer Program specification; adapter not yet implemented |
 | Android Health Connect | Companion/export specification; adapter not yet implemented |
 
 Provider documents are implementation contracts, not claims that every provider
 can already be connected by this package. See [Provider onboarding](docs/providers/README.md).
+
+Provider OAuth runs natively and stores credentials in the operating-system
+credential vault. Stop the native MCP briefly while a connector uses its exact
+loopback callback, then restart it after connection and the first sync. See the
+[Google Health](docs/providers/google-health.md) and
+[Garmin](docs/providers/garmin.md) guides.
 
 ## Optional advanced runtimes
 

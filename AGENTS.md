@@ -30,9 +30,11 @@ runtime requirement.
   clients normally leave optional client ID and client secret fields blank.
 - Keep Docker, tunnel reconciliation, origin JWT validation, and the CLI-agent
   sandbox in advanced operator documentation.
-- Clearly distinguish implemented adapters from provider specifications. Do not
-  describe WHOOP, Oura, Google Health/Fitbit, Garmin, or Health Connect OAuth and
-  sync as implemented until corresponding code and live verification exist.
+- Clearly distinguish implemented adapters from provider specifications. Google
+  Health API v4 is implemented for native use. Garmin is implemented against
+  imported partner-issued endpoints but cannot be described as live-verified
+  without an approved Garmin evaluation account. WHOOP, Oura, and Health Connect
+  remain specifications until corresponding code and live verification exist.
 
 ## Runtime invariants
 
