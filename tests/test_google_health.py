@@ -273,6 +273,36 @@ def test_google_sleep_page_size_respects_provider_limit() -> None:
     assert requests[0].url.params["pageSize"] == "25"
 
 
+def test_google_api_retries_rate_limits_and_transient_server_failures() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        if attempts == 2:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"dataPoints": []})
+
+    api = GoogleHealthAPI(
+        token_provider=lambda: "token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleeper=delays.append,
+    )
+    api.list_data_points(
+        "steps",
+        start="2026-07-13T00:00:00Z",
+        end="2026-07-14T00:00:00Z",
+        limit=10,
+    )
+
+    assert attempts == 3
+    assert len(delays) == 2
+    assert all(0 <= delay <= 5 for delay in delays)
+
+
 @pytest.mark.parametrize(
     ("data_type", "point", "metric", "value", "unit"),
     [

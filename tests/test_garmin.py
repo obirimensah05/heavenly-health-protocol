@@ -193,6 +193,37 @@ def test_garmin_api_uses_configured_partner_paths_and_bounded_epoch_window() -> 
     assert requests[-1].url.params["uploadEndTimeInSeconds"].isdigit()
 
 
+def test_garmin_api_retries_transient_transport_and_server_failures() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("temporary", request=request)
+        if attempts == 2:
+            return httpx.Response(502)
+        return httpx.Response(200, json=[])
+
+    api = GarminHealthAPI(
+        GarminClientCredentials.from_payload(credential_payload()),
+        token_provider=lambda: "token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleeper=delays.append,
+    )
+    api.list_resources(
+        "dailies",
+        start="2026-07-13T00:00:00Z",
+        end="2026-07-14T00:00:00Z",
+        limit=10,
+    )
+
+    assert attempts == 3
+    assert len(delays) == 2
+    assert all(0 <= delay <= 5 for delay in delays)
+
+
 @pytest.mark.parametrize(
     ("resource_type", "resource", "expected"),
     [
