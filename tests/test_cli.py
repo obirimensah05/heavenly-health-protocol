@@ -23,6 +23,15 @@ def test_setup_preview_explains_capability_driven_metrics() -> None:
     assert "Metrics are shown only for the sources you select" in result.stdout
 
 
+def test_setup_preview_distinguishes_implemented_provider_routes() -> None:
+    result = runner.invoke(app, ["setup", "--preview"])
+
+    assert result.exit_code == 0
+    assert "Google Health API v4: implemented native connector" in result.stdout
+    assert "Garmin: implemented connector; Developer Program approval required" in result.stdout
+    assert "WHOOP and Oura: reviewed specifications" in result.stdout
+
+
 def test_access_allow_defaults_to_a_non_mutating_preview() -> None:
     result = runner.invoke(app, ["access", "allow", "new.user@example.com"])
 
