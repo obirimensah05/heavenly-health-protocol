@@ -1,0 +1,298 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+import httpx
+import pytest
+
+from heavenly_health.providers.common import MemorySecretStore, ProviderStateStore
+from heavenly_health.providers.google_health import (
+    GOOGLE_CALLBACK_URL,
+    GOOGLE_HEALTH_SCOPES,
+    GoogleClientCredentials,
+    GoogleHealthAPI,
+    GoogleHealthConnector,
+    GoogleHealthError,
+    GoogleOAuthClient,
+    normalize_google_data_point,
+)
+
+
+NOW = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
+ALLOWED = frozenset(
+    {
+        "steps",
+        "heart_rate",
+        "resting_heart_rate",
+        "heart_rate_variability",
+        "sleep_analysis",
+        "body_mass",
+    }
+)
+
+
+def client_json() -> dict[str, object]:
+    return {
+        "web": {
+            "client_id": "client.apps.googleusercontent.com",
+            "client_secret": "client-secret",
+            "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [GOOGLE_CALLBACK_URL],
+        }
+    }
+
+
+def test_google_client_import_requires_private_web_client_and_redacts(tmp_path: Path) -> None:
+    path = tmp_path / "client.json"
+    path.write_text(json.dumps(client_json()))
+    path.chmod(0o600)
+
+    credentials = GoogleClientCredentials.from_private_json(path)
+
+    assert credentials.client_id.endswith(".apps.googleusercontent.com")
+    assert credentials.redirect_uri == GOOGLE_CALLBACK_URL
+    assert "client-secret" not in repr(credentials)
+
+    path.chmod(0o644)
+    with pytest.raises(GoogleHealthError, match="owner-only"):
+        GoogleClientCredentials.from_private_json(path)
+
+
+def test_google_authorization_uses_pkce_state_offline_and_read_only_scopes() -> None:
+    oauth = GoogleOAuthClient(
+        GoogleClientCredentials.from_payload(client_json()),
+        MemorySecretStore(),
+        clock=lambda: NOW,
+    )
+
+    request = oauth.authorization_request(ALLOWED)
+    query = parse_qs(urlparse(request.url).query)
+
+    assert query["access_type"] == ["offline"]
+    assert query["prompt"] == ["consent"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert query["state"] == [request.state]
+    assert query["redirect_uri"] == [GOOGLE_CALLBACK_URL]
+    assert set(query["scope"][0].split()) == set(GOOGLE_HEALTH_SCOPES)
+    assert request.code_verifier not in request.url
+
+
+def test_google_code_exchange_and_refresh_preserve_refresh_token_without_leaks() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = parse_qs(request.content.decode())
+        if body["grant_type"] == ["authorization_code"]:
+            assert body["code"] == ["one-time-code"]
+            assert body["code_verifier"] == ["pkce-verifier"]
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "first-access",
+                    "refresh_token": "durable-refresh",
+                    "expires_in": 3600,
+                    "scope": " ".join(GOOGLE_HEALTH_SCOPES),
+                    "token_type": "Bearer",
+                },
+            )
+        assert body["refresh_token"] == ["durable-refresh"]
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "second-access",
+                "expires_in": 3600,
+                "scope": " ".join(GOOGLE_HEALTH_SCOPES),
+                "token_type": "Bearer",
+            },
+        )
+
+    secrets = MemorySecretStore()
+    oauth = GoogleOAuthClient(
+        GoogleClientCredentials.from_payload(client_json()),
+        secrets,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        clock=lambda: NOW,
+    )
+
+    first = oauth.exchange_code("one-time-code", code_verifier="pkce-verifier")
+    refreshed = oauth.refresh(first)
+
+    assert refreshed.access_token == "second-access"
+    assert refreshed.refresh_token == "durable-refresh"
+    assert secrets.get("google-health", "oauth-token") is not None
+    assert all("first-access" not in repr(request) for request in requests)
+
+
+def test_google_api_verifies_identity_and_pages_a_bounded_data_window() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["Authorization"] == "Bearer access-token"
+        if request.url.path.endswith("/identity"):
+            return httpx.Response(
+                200,
+                json={"name": "users/me/identity", "healthUserId": "health-user-1"},
+            )
+        if "pageToken=next-page" in str(request.url):
+            return httpx.Response(200, json={"dataPoints": [{"name": "step-2"}]})
+        return httpx.Response(
+            200,
+            json={"dataPoints": [{"name": "step-1"}], "nextPageToken": "next-page"},
+        )
+
+    api = GoogleHealthAPI(
+        token_provider=lambda: "access-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert api.identity()["healthUserId"] == "health-user-1"
+    points = api.list_data_points(
+        "steps",
+        start="2026-07-13T00:00:00Z",
+        end="2026-07-14T00:00:00Z",
+        limit=2,
+    )
+
+    assert [point["name"] for point in points] == ["step-1", "step-2"]
+    assert requests[-1].url.params["pageToken"] == "next-page"
+
+
+@pytest.mark.parametrize(
+    ("data_type", "point", "metric", "value", "unit"),
+    [
+        (
+            "steps",
+            {
+                "name": "users/1/dataTypes/steps/dataPoints/a",
+                "steps": {
+                    "interval": {
+                        "startTime": "2026-07-14T10:00:00Z",
+                        "endTime": "2026-07-14T10:01:00Z",
+                    },
+                    "count": "40",
+                },
+            },
+            "steps",
+            40,
+            "count",
+        ),
+        (
+            "heart-rate",
+            {
+                "name": "users/1/dataTypes/heart-rate/dataPoints/b",
+                "heartRate": {
+                    "sampleTime": {"physicalTime": "2026-07-14T10:02:00Z"},
+                    "beatsPerMinute": 64,
+                },
+            },
+            "heart_rate",
+            64,
+            "bpm",
+        ),
+        (
+            "daily-resting-heart-rate",
+            {
+                "name": "users/1/dataTypes/daily-resting-heart-rate/dataPoints/c",
+                "dailyRestingHeartRate": {
+                    "date": {"year": 2026, "month": 7, "day": 14},
+                    "beatsPerMinute": 52,
+                },
+            },
+            "resting_heart_rate",
+            52,
+            "bpm",
+        ),
+        (
+            "weight",
+            {
+                "name": "users/1/dataTypes/weight/dataPoints/d",
+                "weight": {
+                    "sampleTime": {"physicalTime": "2026-07-14T10:03:00Z"},
+                    "kilograms": 78.2,
+                },
+            },
+            "body_mass",
+            78.2,
+            "kg",
+        ),
+    ],
+)
+def test_google_normalizer_uses_stable_native_identity_and_allowlist(
+    data_type: str,
+    point: dict[str, object],
+    metric: str,
+    value: float,
+    unit: str,
+) -> None:
+    events = normalize_google_data_point(data_type, point, allowed_metrics=ALLOWED)
+
+    assert len(events) == 1
+    assert events[0]["source"] == "google_health"
+    assert events[0]["metric_type"] == metric
+    assert events[0]["value_numeric"] == value
+    assert events[0]["unit"] == unit
+    assert events[0]["source_record_id"].startswith("google-health:")
+    assert "dataSource" not in events[0]["metadata"]
+
+
+def test_google_connector_commits_checkpoint_only_after_raw_and_normalized_storage(
+    tmp_path: Path,
+) -> None:
+    class FakeAPI:
+        def identity(self):
+            return {"healthUserId": "stable-health-user"}
+
+        def list_data_points(self, data_type, *, start, end, limit):
+            assert data_type == "steps"
+            return [
+                {
+                    "name": "users/1/dataTypes/steps/dataPoints/a",
+                    "steps": {
+                        "interval": {
+                            "startTime": start,
+                            "endTime": end,
+                        },
+                        "count": "100",
+                    },
+                }
+            ]
+
+    class FakeStore:
+        settings = type("Settings", (), {"allowed_metrics": frozenset({"steps"})})()
+
+        def __init__(self):
+            self.records = []
+
+        def ingest_provider_resource(self, **kwargs):
+            self.records.append(kwargs)
+            return len(kwargs["events"])
+
+    state = ProviderStateStore(tmp_path / "state")
+    store = FakeStore()
+    connector = GoogleHealthConnector(
+        FakeAPI(),
+        store,
+        state,
+        data_types=("steps",),
+        clock=lambda: NOW,
+    )
+
+    result = connector.sync(days=1, limit=10)
+
+    assert result == {
+        "source": "google_health",
+        "records_processed": 1,
+        "events_upserted": 1,
+        "status": "completed",
+    }
+    assert store.records[0]["source"] == "google_health"
+    saved = state.load("google_health")
+    assert saved["identity_hash"] != "stable-health-user"
+    assert saved["checkpoints"]["steps"] == "2026-07-14T12:00:00Z"
+
