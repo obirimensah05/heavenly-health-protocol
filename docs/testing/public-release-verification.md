@@ -16,27 +16,29 @@ data.
 
 | Gate | Result |
 | --- | --- |
-| Tests | 184 passed |
-| Coverage | 81.06%, above the 80% gate |
+| Tests | 244 passed |
+| Coverage | 81.16%, above the 80% gate |
 | Ruff | Passed |
 | Pyright | Zero errors and warnings |
 | Python compilation | Passed |
 | Source/wheel build | Passed |
 | Compose validation | Passed |
 | Locked dependency audit | No known vulnerabilities |
-| Bandit | Zero medium/high findings; eight reviewed low subprocess notices |
-| Secret heuristic scan | Twelve reviewed, unverified test-fixture matches; no real credentials |
+| Bandit | Zero medium/high findings |
+| Secret heuristic scan | Seventeen reviewed test-fixture candidates; no real credentials |
+| Public release guard | 88 tracked files validated with owner/deployment markers forbidden |
 
-The subprocess notices correspond to fixed-argument lifecycle/Docker commands
-and the explicitly constrained agent launcher. Those boundaries use argument
-lists rather than a shell and are covered by security-focused tests.
+The secret candidates are deliberate fake values used to prove that provider,
+storage, OAuth, and sandbox credentials are redacted or isolated. No candidate
+is a live token, key, owner identity, or deployment value.
 
 ## Real container acceptance
 
 The public image was built from the exported tree and tested on an alternate
 loopback port so an existing native service was not disturbed:
 
-- MCP initialized successfully three consecutive times.
+- Native MCP and the built Docker image both initialized successfully on
+  isolated loopback ports.
 - The unconfigured image exposed only `protocol_status`.
 - The tool call completed without an MCP error.
 - Runtime user was non-root.
@@ -44,12 +46,14 @@ loopback port so an existing native service was not disturbed:
 - Privileged mode was false.
 - All Linux capabilities were dropped.
 - `no-new-privileges` was active.
-- Docker Scout found zero critical and zero high vulnerabilities across 125
-  indexed packages.
+- Docker Scout found zero critical and zero high vulnerabilities.
 
 ## Known product boundary
 
-The release is ready as a technical protocol/runtime. Supabase and bounded
-Health Auto Export normalization are implemented. Provider-specific OAuth and
-sync for WHOOP, Oura, Google Health/Fitbit, Garmin, and Health Connect remain
-documented contracts and are not represented as shipped adapters.
+The release is ready as a technical protocol/runtime. Supabase, bounded Health
+Auto Export normalization, Google Health API v4 OAuth/pull synchronization, and
+the Garmin partner-configurable OAuth/pull adapter are implemented. Google live
+acceptance is performed during owner onboarding with the owner's OAuth client
+and data. Garmin live acceptance additionally requires Developer Program
+approval and partner-issued endpoint details. WHOOP, Oura, and Health Connect
+remain documented contracts and are not represented as shipped adapters.

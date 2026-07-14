@@ -42,7 +42,7 @@ Primary GREEN checkpoints: `0bb68de`, `811d71e`, `c146ce3`, `d9e7e8c`,
 
 ```text
 uv run pytest --cov=src/heavenly_health --cov-report=term-missing --cov-fail-under=80
-240 passed; total coverage 81.23%
+244 passed; total coverage 81.16%
 
 uv run ruff check src tests
 passed
