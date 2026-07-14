@@ -6,9 +6,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import tempfile
 from typing import Any, Mapping, Protocol
@@ -365,6 +367,21 @@ def default_provider_state_path() -> Path:
     state_home = os.environ.get("XDG_STATE_HOME", "").strip()
     root = Path(state_home).expanduser() if state_home else Path.home() / ".local" / "state"
     return root / "heavenly" / "providers"
+
+
+def bounded_retry_delay(headers: Mapping[str, str], attempt: int) -> float:
+    """Return a short Retry-After or exponential-jitter delay capped at five seconds."""
+    retry_after = headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            value = float(retry_after)
+        except ValueError:
+            pass
+        else:
+            if math.isfinite(value) and 0 <= value <= 5:
+                return value
+    exponential = min(4.0, 0.5 * (2 ** max(0, int(attempt))))
+    return min(5.0, exponential + secrets.randbelow(251) / 1000)
 
 
 def _contains_secret_field(value: object) -> bool:

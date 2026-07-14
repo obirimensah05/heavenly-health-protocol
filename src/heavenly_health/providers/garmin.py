@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 import re
 import secrets
+import time
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 from urllib.parse import urlencode, urlparse
@@ -27,6 +28,7 @@ from heavenly_health.providers.common import (
     ProviderConfigurationError,
     ProviderStateStore,
     SecretStore,
+    bounded_retry_delay,
     read_private_json,
     validate_https_url,
 )
@@ -344,10 +346,12 @@ class GarminHealthAPI:
         token_provider: Callable[[], str],
         *,
         http_client: httpx.Client | None = None,
+        sleeper: Callable[[float], None] | None = None,
     ) -> None:
         self.credentials = credentials
         self._token_provider = token_provider
         self._client = http_client or httpx.Client(timeout=30, follow_redirects=False)
+        self._sleep = sleeper or time.sleep
 
     def identity(self) -> dict[str, Any]:
         payload = self._get(self.credentials.identity_path)
@@ -422,22 +426,33 @@ class GarminHealthAPI:
         *,
         params: Mapping[str, str] | None = None,
     ) -> Mapping[str, Any] | list[Any]:
-        try:
-            response = self._client.get(
-                f"{self.credentials.api_base_url}{path}",
-                params=params,
-                headers={
-                    "Authorization": f"Bearer {self._token_provider()}",
-                    "Accept": "application/json",
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError, TypeError) as error:
-            raise GarminHealthError("Garmin Health API request failed") from error
-        if not isinstance(payload, (Mapping, list)):
-            raise GarminHealthError("Garmin Health API response is invalid")
-        return payload
+        for attempt in range(3):
+            try:
+                response = self._client.get(
+                    f"{self.credentials.api_base_url}{path}",
+                    params=params,
+                    headers={
+                        "Authorization": f"Bearer {self._token_provider()}",
+                        "Accept": "application/json",
+                    },
+                )
+                if response.status_code == 429 or response.status_code >= 500:
+                    if attempt < 2:
+                        self._sleep(bounded_retry_delay(response.headers, attempt))
+                        continue
+                response.raise_for_status()
+                payload = response.json()
+            except httpx.TransportError as error:
+                if attempt < 2:
+                    self._sleep(bounded_retry_delay({}, attempt))
+                    continue
+                raise GarminHealthError("Garmin Health API request failed") from error
+            except (httpx.HTTPError, ValueError, TypeError) as error:
+                raise GarminHealthError("Garmin Health API request failed") from error
+            if not isinstance(payload, (Mapping, list)):
+                raise GarminHealthError("Garmin Health API response is invalid")
+            return payload
+        raise GarminHealthError("Garmin Health API request failed")
 
 
 class ProviderHealthStore(Protocol):
