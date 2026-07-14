@@ -55,5 +55,20 @@ Auto Export normalization, Google Health API v4 OAuth/pull synchronization, and
 the Garmin partner-configurable OAuth/pull adapter are implemented. Google live
 acceptance is performed during owner onboarding with the owner's OAuth client
 and data. Garmin live acceptance additionally requires Developer Program
-approval and partner-issued endpoint details. WHOOP, Oura, and Health Connect
-remain documented contracts and are not represented as shipped adapters.
+approval and partner-issued endpoint details. Health Connect remains a
+documented contract and is not represented as a shipped adapter.
+
+## 2026-07-14 release update
+
+Shipped since the record above: the interactive onboarding wizard
+(`heavenly setup`) and native WHOOP and Oura connectors (owner-only env-file
+client import, browser OAuth with a pasted redirect URL, token refresh, bounded
+pull synchronization, per-resource scope skips). Both connectors passed live
+owner acceptance: authorization, token refresh, and bounded synchronization
+completed against real provider accounts; WHOOP data reads additionally
+require an active membership on the authorizing account.
+
+Gates rerun for this update: tests (269 passed), Ruff, Pyright, Python
+compilation, lock check, source/wheel build, Compose validation, and the
+public release guard with owner/deployment markers forbidden. The container
+acceptance results above are from the prior record and were not rerun.

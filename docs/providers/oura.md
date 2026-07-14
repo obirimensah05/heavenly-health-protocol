@@ -1,8 +1,34 @@
 # Connect Oura securely
 
-> **Current status:** manual provider walkthrough and connector specification.
-> The checked-in Heavenly CLI does not yet import credentials, run Oura OAuth,
-> receive webhooks, or synchronize Oura data.
+> **Current status:** implemented native connector. Heavenly imports an
+> owner-only Oura env file, runs browser OAuth with a pasted redirect URL,
+> refreshes tokens, and performs bounded pull synchronization into the
+> raw-provenance and allowlisted normalized tables. Resources the grant
+> cannot read are skipped and reported, never fatal. Webhooks are not
+> implemented.
+
+## Connect with the CLI
+
+```bash
+install -d -m 700 "$HOME/.config/heavenly"
+${EDITOR:-vi} "$HOME/.config/heavenly/oura.env"    # see keys below; chmod 600
+heavenly provider oura import-client "$HOME/.config/heavenly/oura.env"
+heavenly provider oura connect
+heavenly provider oura sync --limit 1000
+```
+
+`oura.env` needs exactly these keys from your Oura API application:
+
+```text
+OURA_CLIENT_ID=...
+OURA_CLIENT_SECRET=...
+OURA_REDIRECT_URI=...    # the redirect URL registered on the application
+OURA_SCOPES=daily heartrate workout
+```
+
+`connect` opens Oura in your browser; after approval, paste the redirected
+URL back into the terminal. Tokens go to the operating-system credential
+vault, never to disk or Git.
 
 Use Oura OAuth 2.0 authorization-code flow. Oura Personal Access Tokens were deprecated in December 2025 and are **not** an onboarding route, including for a single-user installation. Never paste a callback URL, authorization code, client secret, or token into chat.
 

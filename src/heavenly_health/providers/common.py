@@ -363,6 +363,43 @@ def read_private_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def read_private_env(path: Path) -> dict[str, str]:
+    """Read a bounded owner-only KEY=VALUE file without following symlinks."""
+    target = path.expanduser()
+    if not target.is_absolute() or target.is_symlink():
+        raise ProviderConfigurationError("Provider credential file must be an absolute regular file")
+    descriptor = -1
+    try:
+        descriptor = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or metadata.st_size > _MAX_PRIVATE_JSON_BYTES
+        ):
+            raise ProviderConfigurationError(
+                "Provider credential file must be owner-only and at most 128 KiB"
+            )
+        with os.fdopen(descriptor, "r", encoding="utf-8") as file:
+            descriptor = -1
+            contents = file.read()
+    except ProviderConfigurationError:
+        raise
+    except (OSError, UnicodeError) as error:
+        raise ProviderConfigurationError("Provider credential file is unreadable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    values: dict[str, str] = {}
+    for line in contents.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
 def default_provider_state_path() -> Path:
     state_home = os.environ.get("XDG_STATE_HOME", "").strip()
     root = Path(state_home).expanduser() if state_home else Path.home() / ".local" / "state"

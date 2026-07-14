@@ -1,8 +1,35 @@
 # Connect WHOOP securely
 
-> **Current status:** manual provider walkthrough and connector specification.
-> The checked-in Heavenly CLI does not yet import credentials, run WHOOP OAuth,
-> receive webhooks, or synchronize WHOOP data.
+> **Current status:** implemented native connector. Heavenly imports an
+> owner-only WHOOP env file, runs browser OAuth with a pasted redirect URL,
+> refreshes tokens, and performs bounded pull synchronization into the
+> raw-provenance and allowlisted normalized tables. Webhooks are not
+> implemented. Reading data requires an active WHOOP membership on the
+> authorizing account; authorization alone succeeds without one.
+
+## Connect with the CLI
+
+```bash
+install -d -m 700 "$HOME/.config/heavenly"
+${EDITOR:-vi} "$HOME/.config/heavenly/whoop.env"   # see keys below; chmod 600
+heavenly provider whoop import-client "$HOME/.config/heavenly/whoop.env"
+heavenly provider whoop connect
+heavenly provider whoop sync --limit 1000
+```
+
+`whoop.env` needs exactly these keys from your WHOOP developer app:
+
+```text
+WHOOP_CLIENT_ID=...
+WHOOP_CLIENT_SECRET=...
+WHOOP_REDIRECT_URI=...   # the redirect URL registered on the app
+WHOOP_SCOPES=offline read:recovery read:cycles read:sleep read:workout read:profile
+```
+
+`connect` opens WHOOP in your browser; after approval, paste the redirected
+URL back into the terminal. Tokens go to the operating-system credential
+vault, never to disk or Git. WHOOP's edge WAF requires a browser user agent;
+the connector handles this automatically.
 
 Use this route when WHOOP—not an Apple/Google mirror—is the authoritative source. This walkthrough uses WHOOP OAuth 2.0 authorization-code flow. Never paste a callback URL, authorization code, client secret, access token, or refresh token into chat.
 

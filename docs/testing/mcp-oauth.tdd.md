@@ -38,10 +38,10 @@ The Docker regression was reproduced by the real container traceback, locked int
 `test_managed_oauth_settings_are_all_or_nothing_and_reject_unsafe_origins`, fixed,
 and rechecked against `docker compose up --wait`.
 
-## Maintainer acceptance evidence
+## Live acceptance on 2026-07-14
 
-A self-hosted test application was updated to Managed OAuth only after the
-native origin verifier and protected settings were active.
+The existing private self-hosted Access application was updated to Managed OAuth
+after the native origin verifier and protected settings were active.
 
 Observed without exposing identities, tokens, records, or credentials:
 

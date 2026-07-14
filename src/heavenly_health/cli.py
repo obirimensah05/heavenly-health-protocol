@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import os
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ from heavenly_health.cloudflare_managed_oauth import (
 )
 from heavenly_health.launcher import DEFAULT_RUNTIME_ENV
 from heavenly_health.health_storage import HealthStorageError, SupabaseHealthStore, SupabaseSettings
+from heavenly_health import onboarding
+from heavenly_health.onboarding import OnboardingAnswers
 from heavenly_health.providers.common import ProviderConfigurationError
 from heavenly_health.providers.runtime import ProviderRuntime
 from heavenly_health.secret_loader import SecretFileError, load_runtime_environment
@@ -70,6 +73,14 @@ garmin_provider_app = typer.Typer(
     help="Manage an approved Garmin Connect Health API integration.",
     no_args_is_help=True,
 )
+whoop_provider_app = typer.Typer(
+    help="Manage the WHOOP connector.",
+    no_args_is_help=True,
+)
+oura_provider_app = typer.Typer(
+    help="Manage the Oura connector.",
+    no_args_is_help=True,
+)
 app.add_typer(access_app, name="access")
 access_app.add_typer(access_oauth_app, name="oauth")
 app.add_typer(runtime_app, name="runtime")
@@ -78,6 +89,8 @@ app.add_typer(agent_app, name="agent")
 app.add_typer(provider_app, name="provider")
 provider_app.add_typer(google_provider_app, name="google-health")
 provider_app.add_typer(garmin_provider_app, name="garmin")
+provider_app.add_typer(whoop_provider_app, name="whoop")
+provider_app.add_typer(oura_provider_app, name="oura")
 
 
 @app.callback()
@@ -228,6 +241,101 @@ def garmin_disconnect(
         raise typer.Exit(code=1)
     _provider_output(
         lambda: _provider_runtime().disconnect_garmin(remove_client=remove_client)
+    )
+
+
+def _pasted_browser_authorize(url: str) -> str:
+    console.print("Opening the provider's authorization page in your browser…")
+    typer.launch(url)
+    console.print("After you approve, the browser lands on the app's redirect page.")
+    return typer.prompt("Paste the complete URL from that browser page")
+
+
+@whoop_provider_app.command("import-client")
+def whoop_import_client(path: Path = typer.Argument(..., exists=True, dir_okay=False)) -> None:
+    """Import an owner-only WHOOP env file (client ID, secret, redirect, scopes)."""
+    _provider_output(lambda: _provider_runtime().import_whoop_client(path))
+
+
+@whoop_provider_app.command("connect")
+def whoop_connect() -> None:
+    """Authorize WHOOP in your browser, then paste the redirected URL back."""
+    def connect() -> object:
+        store = _configured_health_store()
+        return _provider_runtime().connect_whoop(
+            store.settings.allowed_metrics,
+            authorize=_pasted_browser_authorize,
+        )
+
+    _provider_output(connect)
+
+
+@whoop_provider_app.command("sync")
+def whoop_sync(limit: int = typer.Option(1000, min=1, max=10_000)) -> None:
+    """Synchronize a bounded WHOOP window into configured storage."""
+    _provider_output(
+        lambda: _provider_runtime().sync("whoop", _configured_health_store(), limit=limit)
+    )
+
+
+@whoop_provider_app.command("disconnect")
+def whoop_disconnect(
+    yes: bool = typer.Option(False, "--yes", help="Confirm local token deletion."),
+    remove_client: bool = typer.Option(
+        False,
+        "--remove-client",
+        help="Also remove the reusable WHOOP client from the system vault.",
+    ),
+) -> None:
+    """Delete local WHOOP tokens and connection state."""
+    if not yes and not typer.confirm("Disconnect WHOOP and delete the local token?"):
+        raise typer.Exit(code=1)
+    _provider_output(
+        lambda: _provider_runtime().disconnect_whoop(remove_client=remove_client)
+    )
+
+
+@oura_provider_app.command("import-client")
+def oura_import_client(path: Path = typer.Argument(..., exists=True, dir_okay=False)) -> None:
+    """Import an owner-only Oura env file (client ID, secret, redirect, scopes)."""
+    _provider_output(lambda: _provider_runtime().import_oura_client(path))
+
+
+@oura_provider_app.command("connect")
+def oura_connect() -> None:
+    """Authorize Oura in your browser, then paste the redirected URL back."""
+    def connect() -> object:
+        store = _configured_health_store()
+        return _provider_runtime().connect_oura(
+            store.settings.allowed_metrics,
+            authorize=_pasted_browser_authorize,
+        )
+
+    _provider_output(connect)
+
+
+@oura_provider_app.command("sync")
+def oura_sync(limit: int = typer.Option(1000, min=1, max=10_000)) -> None:
+    """Synchronize a bounded Oura window into configured storage."""
+    _provider_output(
+        lambda: _provider_runtime().sync("oura", _configured_health_store(), limit=limit)
+    )
+
+
+@oura_provider_app.command("disconnect")
+def oura_disconnect(
+    yes: bool = typer.Option(False, "--yes", help="Confirm local token deletion."),
+    remove_client: bool = typer.Option(
+        False,
+        "--remove-client",
+        help="Also remove the reusable Oura client from the system vault.",
+    ),
+) -> None:
+    """Delete local Oura tokens and connection state."""
+    if not yes and not typer.confirm("Disconnect Oura and delete the local token?"):
+        raise typer.Exit(code=1)
+    _provider_output(
+        lambda: _provider_runtime().disconnect_oura(remove_client=remove_client)
     )
 
 
@@ -593,8 +701,207 @@ def agent_run(
         raise typer.Exit(code=returncode)
 
 
-def _heading(step: int, title: str) -> None:
-    console.print(f"\n[bold cyan][{step}/6][/bold cyan] [bold]{title}[/bold]")
+def _heading(step: int, title: str, total: int = 6) -> None:
+    console.print(f"\n[bold cyan][{step}/{total}][/bold cyan] [bold]{title}[/bold]")
+
+
+def _choose_one(question: str, options: list[tuple[str, str]], default: int = 1) -> str:
+    """Number the options, ask once, and return the chosen key."""
+    console.print(f"\n[bold]{question}[/bold]")
+    for index, (_, label) in enumerate(options, start=1):
+        console.print(f"  {index}. {label}")
+    while True:
+        raw = typer.prompt("Pick one", default=str(default))
+        try:
+            position = int(raw.strip())
+            if 1 <= position <= len(options):
+                return options[position - 1][0]
+        except ValueError:
+            pass
+        console.print(f"[yellow]Enter a number between 1 and {len(options)}.[/yellow]")
+
+
+def _choose_many(question: str, options: list[tuple[str, str]], default: int = 1) -> tuple[str, ...]:
+    """Number the options, allow a comma-separated pick, and return the keys."""
+    console.print(f"\n[bold]{question}[/bold]")
+    for index, (_, label) in enumerate(options, start=1):
+        console.print(f"  {index}. {label}")
+    while True:
+        raw = typer.prompt("Pick one or more (e.g. 1,3)", default=str(default))
+        try:
+            positions = [int(piece) for piece in raw.replace(",", " ").split()]
+            if positions and all(1 <= position <= len(options) for position in positions):
+                seen: list[str] = []
+                for position in positions:
+                    key = options[position - 1][0]
+                    if key not in seen:
+                        seen.append(key)
+                return tuple(seen)
+        except ValueError:
+            pass
+        console.print(f"[yellow]Enter numbers between 1 and {len(options)}.[/yellow]")
+
+
+ONBOARDING_ANSWERS_PATH = onboarding.default_answers_path()
+
+
+def _run_onboarding_wizard() -> None:
+    console.print(
+        Panel(
+            Text("Connect your health data to your AI agent, privately.", style="bold white"),
+            title="[bold cyan]Heavenly Health Protocol[/bold cyan]",
+            border_style="cyan",
+            padding=(1, 2),
+        )
+    )
+
+    total = 7
+
+    _heading(1, "Which fitness or health device do you use?", total)
+    devices = _choose_many("Your device(s)", list(onboarding.DEVICES.items()))
+
+    _heading(2, "Which app is your health data's source of truth?", total)
+    suggested: list[str] = []
+    for device in devices:
+        for source in onboarding.DEVICE_SOURCE_APPS.get(device, ()):
+            if source not in suggested:
+                suggested.append(source)
+    source_options = [
+        (key, onboarding.SOURCE_APPS[key][0]
+         + ("" if onboarding.SOURCE_APPS[key][1] == "implemented" else "  (coming soon)"))
+        for key in suggested
+    ]
+    source_app = _choose_one("Your tracking app", source_options)
+    source_ready = onboarding.SOURCE_APPS[source_app][1] == "implemented"
+    if not source_ready:
+        console.print(
+            "[yellow]That connector is not built yet. Your choice is recorded, and the"
+            " rest of setup still works — you can add an implemented source anytime.[/yellow]"
+        )
+
+    _heading(3, "Where should your agent-readable health data live?", total)
+    destination_options = [
+        (key, label + ("" if status == "implemented" else "  (coming soon)"))
+        for key, (label, status) in onboarding.DESTINATIONS.items()
+    ]
+    destination = _choose_one("Your destination", destination_options)
+    supabase_url = ""
+    supabase_key = ""
+    if destination == "supabase":
+        if typer.confirm("Do you have your Supabase project URL and service-role key ready?", default=False):
+            supabase_url = typer.prompt("Supabase URL").strip()
+            supabase_key = typer.prompt("Service-role key", hide_input=True).strip()
+        else:
+            console.print(
+                "[dim]No problem — Heavenly runs in status-only mode until you add them."
+                " Re-run `heavenly setup` whenever you are ready.[/dim]"
+            )
+    else:
+        console.print(
+            "[yellow]That destination is coming soon. Supabase is the route that works"
+            " today; your preference is recorded.[/yellow]"
+        )
+
+    _heading(4, "Which AI agent should read your health data?", total)
+    agent = _choose_one("Your agent", list(onboarding.AGENTS.items()))
+    agent_location = _choose_one("Where does that agent run?", list(onboarding.AGENT_LOCATIONS.items()))
+
+    _heading(5, "When should your health analysis arrive?", total)
+    frequency = _choose_one("How often?", list(onboarding.FREQUENCIES.items()))
+    arrival = _choose_one("When should it arrive?", list(onboarding.ARRIVALS.items()))
+    briefing_time = typer.prompt("Delivery time (24h)", default="09:30").strip()
+    detected_timezone = str(datetime.now().astimezone().tzinfo or "UTC")
+    console.print(f"[dim]Times use your system timezone ({detected_timezone}).[/dim]")
+
+    answers = OnboardingAnswers(
+        devices=devices,
+        source_app=source_app,
+        destination=destination,
+        agent=agent,
+        agent_location=agent_location,
+        frequency=frequency,
+        arrival=arrival,
+        briefing_time=briefing_time,
+        timezone=detected_timezone,
+    )
+
+    _heading(6, "Tracking permissions", total)
+    metrics = answers.metrics()
+    if metrics:
+        console.print("Heavenly will track only these metrics (sensitive data stays off):")
+        console.print("  " + ", ".join(metrics))
+        if not typer.confirm("Use this metric list?", default=True):
+            console.print(
+                "[dim]Edit HEAVENLY_ALLOWED_METRICS in your runtime file afterwards to"
+                " narrow it further.[/dim]"
+            )
+    else:
+        console.print("[dim]Metrics unlock once an implemented source is selected.[/dim]")
+
+    runtime_env_content = onboarding.render_runtime_env(
+        answers,
+        supabase_url=supabase_url,
+        supabase_service_role_key=supabase_key,
+    )
+    if DEFAULT_RUNTIME_ENV.exists() and not typer.confirm(
+        f"{DEFAULT_RUNTIME_ENV} exists. Overwrite it?", default=False
+    ):
+        console.print("[yellow]Kept your existing runtime file.[/yellow]")
+    else:
+        onboarding.write_owner_only(DEFAULT_RUNTIME_ENV, runtime_env_content)
+        console.print(f"Saved owner-only settings to {DEFAULT_RUNTIME_ENV}")
+    onboarding.save_answers(ONBOARDING_ANSWERS_PATH, answers)
+
+    _heading(7, "Start and connect", total)
+    if typer.confirm("Start Heavenly on this computer now?", default=True):
+        try:
+            LocalConfigStore(default_config_path()).set_runtime("native")
+            result = _runtime_manager().start("native")
+            console.print(f"Started {result.runtime} service ({result.state}).")
+        except (ConfigError, RuntimeConflictError, RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+            console.print(f"[yellow]Could not start automatically ({error}). Run `heavenly runtime start` later.[/yellow]")
+    else:
+        console.print("[dim]Start it anytime with: heavenly runtime start[/dim]")
+
+    if typer.confirm("Connect your AI agent now?", default=True):
+        console.print("\n[bold]Connect your AI agent[/bold]")
+        for line in onboarding.connect_instructions(agent, remote=agent_location in {"cloud", "both"}):
+            console.print(f"  {line}")
+    else:
+        console.print("[dim]Connect your AI agent later — the steps are in the README.[/dim]")
+
+    if typer.confirm("Set up advanced extras now (Docker runtime, remote access)?", default=False):
+        console.print("  Docker runtime: docs/deployment.md")
+        console.print("  Remote access for cloud agents: docs/deployment.md")
+        console.print("  Agent sandbox: docs/agent-sandbox.md")
+
+    next_steps: list[str] = []
+    if source_app == "google_health":
+        next_steps.append("Google Health: follow docs/providers/google-health.md, then run"
+                          " `heavenly provider google-health connect`.")
+    if source_app == "apple_health":
+        next_steps.append("Apple Health: install the Health Auto Export app and point it at your"
+                          " Supabase delivery table (docs/onboarding.md).")
+    if source_app == "garmin":
+        next_steps.append("Garmin: requires Garmin Developer Program approval —"
+                          " see docs/providers/garmin.md.")
+    if source_app == "whoop":
+        next_steps.append("WHOOP: create a WHOOP developer app, save its details to"
+                          " ~/.config/heavenly/whoop.env, then run `heavenly provider whoop"
+                          " import-client` and `connect` (data needs an active membership).")
+    if source_app == "oura":
+        next_steps.append("Oura: create an Oura API application, save its details to"
+                          " ~/.config/heavenly/oura.env, then run `heavenly provider oura"
+                          " import-client` and `connect`.")
+    if not source_ready:
+        next_steps.append(f"{onboarding.SOURCE_APPS[source_app][0]}: adapter is on the roadmap;"
+                          " you will not need to redo this setup.")
+    if destination == "supabase" and not supabase_url:
+        next_steps.append("Supabase: create a free project, apply the migrations in sql/, then"
+                          " re-run `heavenly setup` to add its URL and key.")
+    if next_steps:
+        console.print(Panel("\n".join(f"• {step}" for step in next_steps), title="Your next steps", border_style="cyan"))
+    console.print("[bold green]Onboarding complete.[/bold green]")
 
 
 @app.command()
@@ -603,16 +910,7 @@ def setup(
 ) -> None:
     """Start privacy-first health-data onboarding."""
     if not preview:
-        console.print(
-            Panel(
-                "Interactive setup is the next implementation slice.\n"
-                "Use [bold]heavenly setup --preview[/bold] to review the design now.\n"
-                "Implemented Google Health and Garmin operations are under "
-                "[bold]heavenly provider[/bold].",
-                title="Heavenly Health Protocol",
-                border_style="cyan",
-            )
-        )
+        _run_onboarding_wizard()
         raise typer.Exit()
 
     console.print(

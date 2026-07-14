@@ -27,12 +27,20 @@ from heavenly_health.providers.garmin import (
     resource_types_for_metrics,
 )
 from heavenly_health.providers.oauth_loopback import OAuthCallbackError, receive_oauth_callback
+from heavenly_health.providers.oura import OuraAPI, OuraConnector, OuraOAuthClient
+from heavenly_health.providers.whoop import WhoopAPI, WhoopConnector, WhoopOAuthClient
+
+import httpx
+
+
+def _provider_http_client() -> "httpx.Client":
+    return httpx.Client(timeout=30, follow_redirects=False)
 
 
 class ProviderRuntime:
     """Discover, report, and dispatch only explicitly supported providers."""
 
-    SOURCES = ("google_health", "garmin")
+    SOURCES = ("google_health", "garmin", "whoop", "oura")
 
     def __init__(
         self,
@@ -174,6 +182,111 @@ class ProviderRuntime:
             "remote_revocation": remotely_revoked,
         }
 
+    def import_whoop_client(self, path: Path) -> dict[str, Any]:
+        WhoopOAuthClient.import_credentials(path, self.secret_store)
+        return {"source": "whoop", "client_configured": True}
+
+    def connect_whoop(
+        self,
+        allowed_metrics: frozenset[str],
+        *,
+        authorize: Callable[[str], str],
+    ) -> dict[str, Any]:
+        from heavenly_health.providers.whoop import whoop_resources_for_metrics
+
+        oauth = WhoopOAuthClient(
+            WhoopOAuthClient.load(self.secret_store).credentials,
+            self.secret_store,
+            http_client=_provider_http_client(),
+        )
+        request = oauth.authorization_request()
+        returned_url = authorize(request.url)
+        code = oauth.parse_callback(returned_url, expected_state=request.state)
+        token = oauth.exchange_code(code)
+        api = WhoopAPI(oauth.access_token, http_client=_provider_http_client())
+        identity = api.identity()
+        resources = whoop_resources_for_metrics(allowed_metrics)
+        if not resources:
+            raise ProviderConfigurationError("No allowlisted metric maps to a WHOOP resource")
+        self.state_store.save(
+            "whoop",
+            {
+                "connected": True,
+                "identity_hash": hashlib.sha256(str(identity["user_id"]).encode()).hexdigest(),
+                "connected_at": _timestamp(datetime.now(timezone.utc)),
+                "last_sync_at": None,
+                "data_types": list(resources),
+                "checkpoints": {},
+            },
+        )
+        return {
+            "source": "whoop",
+            "connected": True,
+            "granted_scopes": len(token.scopes),
+            "data_types": list(resources),
+        }
+
+    def disconnect_whoop(self, *, remove_client: bool = False) -> dict[str, Any]:
+        oauth = WhoopOAuthClient.load(self.secret_store)
+        remotely_revoked = oauth.revoke()
+        if remove_client:
+            self.secret_store.delete(WhoopOAuthClient.SERVICE, WhoopOAuthClient.CLIENT_ACCOUNT)
+        self.state_store.delete("whoop")
+        return {"source": "whoop", "connected": False, "remote_revocation": remotely_revoked}
+
+    def import_oura_client(self, path: Path) -> dict[str, Any]:
+        OuraOAuthClient.import_credentials(path, self.secret_store)
+        return {"source": "oura", "client_configured": True}
+
+    def connect_oura(
+        self,
+        allowed_metrics: frozenset[str],
+        *,
+        authorize: Callable[[str], str],
+    ) -> dict[str, Any]:
+        from heavenly_health.providers.oura import oura_resources_for_metrics
+
+        oauth = OuraOAuthClient(
+            OuraOAuthClient.load(self.secret_store).credentials,
+            self.secret_store,
+            http_client=_provider_http_client(),
+        )
+        request = oauth.authorization_request()
+        returned_url = authorize(request.url)
+        code = oauth.parse_callback(returned_url, expected_state=request.state)
+        token = oauth.exchange_code(code)
+        api = OuraAPI(oauth.access_token, http_client=_provider_http_client())
+        identity = api.identity()
+        identity_value = str(identity.get("id") or identity.get("email"))
+        resources = oura_resources_for_metrics(allowed_metrics)
+        if not resources:
+            raise ProviderConfigurationError("No allowlisted metric maps to an Oura resource")
+        self.state_store.save(
+            "oura",
+            {
+                "connected": True,
+                "identity_hash": hashlib.sha256(identity_value.encode()).hexdigest(),
+                "connected_at": _timestamp(datetime.now(timezone.utc)),
+                "last_sync_at": None,
+                "data_types": list(resources),
+                "checkpoints": {},
+            },
+        )
+        return {
+            "source": "oura",
+            "connected": True,
+            "granted_scopes": len(token.scopes),
+            "data_types": list(resources),
+        }
+
+    def disconnect_oura(self, *, remove_client: bool = False) -> dict[str, Any]:
+        oauth = OuraOAuthClient.load(self.secret_store)
+        remotely_revoked = oauth.revoke()
+        if remove_client:
+            self.secret_store.delete(OuraOAuthClient.SERVICE, OuraOAuthClient.CLIENT_ACCOUNT)
+        self.state_store.delete("oura")
+        return {"source": "oura", "connected": False, "remote_revocation": remotely_revoked}
+
     def sync(self, source: str, store: Any, *, limit: int = 1000) -> dict[str, Any]:
         if source not in self.SOURCES:
             raise ProviderConfigurationError("Unsupported provider source")
@@ -189,6 +302,14 @@ class ProviderRuntime:
             oauth = GarminOAuthClient.load(self.secret_store)
             api = GarminHealthAPI(oauth.credentials, oauth.access_token)
             return GarminHealthConnector(api, store, self.state_store)
+        if source == "whoop":
+            oauth = WhoopOAuthClient.load(self.secret_store, http_client=_provider_http_client())
+            api = WhoopAPI(oauth.access_token, http_client=_provider_http_client())
+            return WhoopConnector(api, store, self.state_store)
+        if source == "oura":
+            oauth = OuraOAuthClient.load(self.secret_store, http_client=_provider_http_client())
+            api = OuraAPI(oauth.access_token, http_client=_provider_http_client())
+            return OuraConnector(api, store, self.state_store)
         raise ProviderConfigurationError("Unsupported provider source")
 
 

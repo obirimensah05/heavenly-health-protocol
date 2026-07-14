@@ -22,7 +22,7 @@ _SHA256 = re.compile(r"^[a-fA-F0-9]{64}$")
 _MAX_QUERY_DAYS = 31
 _MAX_QUERY_RESULTS = 200
 _MAX_SYNC_DELIVERIES = 100
-_PROVIDER_SOURCES = frozenset({"google_health", "garmin"})
+_PROVIDER_SOURCES = frozenset({"google_health", "garmin", "whoop", "oura"})
 _PROVIDER_RESOURCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _PROVIDER_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_.-]{0,511}$")
 
