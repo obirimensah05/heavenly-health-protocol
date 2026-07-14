@@ -59,6 +59,18 @@ def test_public_release_allows_placeholder_environment_template(tmp_path: Path) 
     assert validate_public_tree(tmp_path, [".env.example"]) == (Path(".env.example"),)
 
 
+def test_public_release_allows_safe_token_identifiers_and_endpoint_constants(
+    tmp_path: Path,
+) -> None:
+    module = tmp_path / "provider.py"
+    module.write_text(
+        'GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"\n'
+        "previous_refresh_token=previous_refresh_token,\n"
+    )
+
+    assert validate_public_tree(tmp_path, ["provider.py"]) == (Path("provider.py"),)
+
+
 def test_public_release_allows_documented_container_service_home_paths(
     tmp_path: Path,
 ) -> None:
