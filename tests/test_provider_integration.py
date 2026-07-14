@@ -204,3 +204,56 @@ def test_provider_runtime_connects_google_and_persists_only_pseudonymous_state(
     saved = state.load("google_health")
     assert saved["identity_hash"] != "private-google-identity"
     assert "private-google-identity" not in repr(saved)
+
+
+def test_provider_runtime_dispatches_garmin_connector(monkeypatch, tmp_path) -> None:
+    from heavenly_health.providers.garmin import (
+        GarminClientCredentials,
+        GarminOAuthClient,
+    )
+    from heavenly_health.providers.oauth_loopback import OAuthCallbackResult
+
+    secrets = MemorySecretStore()
+    credentials = GarminClientCredentials.from_payload(
+        {
+            "client_id": "garmin-client-id",
+            "client_secret": "garmin-client-secret",
+            "authorization_url": "https://connect.garmin.com/oauth2/authorize",
+            "token_url": "https://connect.garmin.com/oauth2/token",
+            "api_base_url": "https://apis.garmin.com",
+            "redirect_uri": "http://127.0.0.1:8791/providers/garmin/oauth/callback",
+            "scopes": ["health"],
+            "identity_path": "/wellness-api/rest/user/id",
+            "resource_paths": {"dailies": "/wellness-api/rest/dailies"},
+        }
+    )
+    secrets.set(
+        GarminOAuthClient.SERVICE,
+        GarminOAuthClient.CLIENT_ACCOUNT,
+        credentials.to_json(),
+    )
+    state = ProviderStateStore(tmp_path / "providers")
+    runtime = ProviderRuntime(secret_store=secrets, state_store=state)
+    monkeypatch.setattr(
+        "heavenly_health.providers.runtime.receive_oauth_callback",
+        lambda **_kwargs: OAuthCallbackResult(code="one-time-code"),
+    )
+    monkeypatch.setattr(
+        GarminOAuthClient,
+        "exchange_code",
+        lambda self, code, *, code_verifier: type(
+            "Token", (), {"scopes": frozenset({"health"})}
+        )(),
+    )
+    monkeypatch.setattr(
+        "heavenly_health.providers.runtime.GarminHealthAPI.identity",
+        lambda self: {"userId": "private-garmin-identity"},
+    )
+
+    result = runtime.connect_garmin(frozenset({"steps"}))
+
+    assert result["source"] == "garmin"
+    assert result["data_types"] == ["dailies"]
+    saved = state.load("garmin")
+    assert saved["identity_hash"] != "private-garmin-identity"
+    assert "private-garmin-identity" not in repr(saved)
