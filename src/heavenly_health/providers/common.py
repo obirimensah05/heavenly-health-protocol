@@ -86,15 +86,32 @@ class OAuthToken:
     def from_json(cls, value: str) -> OAuthToken:
         try:
             payload = json.loads(value)
+            if not isinstance(payload, Mapping):
+                raise ValueError
+            access_token = payload.get("access_token")
+            refresh_token = payload.get("refresh_token")
+            scopes = payload.get("scopes", [])
+            token_type = payload.get("token_type", "Bearer")
+            if (
+                not isinstance(access_token, str)
+                or not access_token.strip()
+                or (refresh_token is not None and not isinstance(refresh_token, str))
+                or (isinstance(refresh_token, str) and not refresh_token.strip())
+                or not isinstance(scopes, list)
+                or not all(isinstance(scope, str) and scope for scope in scopes)
+                or not isinstance(token_type, str)
+                or token_type.lower() != "bearer"
+            ):
+                raise ValueError
             expires_at = datetime.fromisoformat(str(payload["expires_at"]).replace("Z", "+00:00"))
+            if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+                raise ValueError
             return cls(
-                access_token=str(payload["access_token"]),
-                refresh_token=(
-                    str(payload["refresh_token"]) if payload.get("refresh_token") else None
-                ),
+                access_token=access_token.strip(),
+                refresh_token=refresh_token.strip() if isinstance(refresh_token, str) else None,
                 expires_at=_aware(expires_at),
-                scopes=frozenset(str(scope) for scope in payload.get("scopes", [])),
-                token_type=str(payload.get("token_type", "Bearer")),
+                scopes=frozenset(scopes),
+                token_type="Bearer",
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise ProviderConfigurationError("Stored provider token is invalid") from error

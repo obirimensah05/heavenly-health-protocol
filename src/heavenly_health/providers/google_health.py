@@ -131,14 +131,20 @@ class GoogleClientCredentials:
     def from_json(cls, value: str) -> GoogleClientCredentials:
         try:
             payload = json.loads(value)
-            return cls(
-                client_id=str(payload["client_id"]),
-                client_secret=str(payload["client_secret"]),
-                authorization_url=str(payload["authorization_url"]),
-                token_url=str(payload["token_url"]),
-                redirect_uri=str(payload["redirect_uri"]),
+            if not isinstance(payload, Mapping) or payload.get("redirect_uri") != GOOGLE_CALLBACK_URL:
+                raise GoogleHealthError("Stored Google OAuth client is invalid")
+            return cls.from_payload(
+                {
+                    "web": {
+                        "client_id": payload.get("client_id"),
+                        "client_secret": payload.get("client_secret"),
+                        "auth_uri": payload.get("authorization_url"),
+                        "token_uri": payload.get("token_url"),
+                        "redirect_uris": [payload.get("redirect_uri")],
+                    }
+                }
             )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
             raise GoogleHealthError("Stored Google OAuth client is invalid") from error
 
 
