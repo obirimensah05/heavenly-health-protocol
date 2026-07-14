@@ -779,7 +779,7 @@ requires-dist = [
     { name = "keyring", specifier = ">=25.7,<26" },
     { name = "mcp", specifier = ">=1.0,<2" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.10.0,<2.11" },
-    { name = "py-key-value-aio", extras = ["filetree"], specifier = ">=0.4,<1" },
+    { name = "py-key-value-aio", extras = ["filetree"], specifier = ">=0.4.5,<1" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.411,<1.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3,<10" },
