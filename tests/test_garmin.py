@@ -91,6 +91,69 @@ def test_garmin_authorization_uses_partner_scopes_state_pkce_and_exact_callback(
     assert request.code_verifier not in request.url
 
 
+def test_garmin_code_exchange_refresh_access_and_remote_revocation() -> None:
+    payload = credential_payload()
+    payload["revocation_url"] = "https://connect.garmin.com/oauth2/revoke"
+    credentials = GarminClientCredentials.from_payload(payload)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/token"):
+            body = parse_qs(request.content.decode())
+            if body["grant_type"] == ["authorization_code"]:
+                return httpx.Response(
+                    200,
+                    json={
+                        "access_token": "first-access",
+                        "refresh_token": "durable-refresh",
+                        "expires_in": 3600,
+                        "scope": "health",
+                        "token_type": "Bearer",
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "second-access",
+                    "expires_in": 3600,
+                    "scope": "health",
+                    "token_type": "Bearer",
+                },
+            )
+        return httpx.Response(200, json={})
+
+    secrets = MemorySecretStore()
+    oauth = GarminOAuthClient(
+        credentials,
+        secrets,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        clock=lambda: NOW,
+    )
+    first = oauth.exchange_code("one-time-code", code_verifier="verifier")
+    refreshed = oauth.refresh(first)
+
+    assert refreshed.refresh_token == "durable-refresh"
+    assert oauth.access_token() == "second-access"
+    assert oauth.revoke() is True
+    assert secrets.get(GarminOAuthClient.SERVICE, GarminOAuthClient.TOKEN_ACCOUNT) is None
+    assert requests[-1].url.path.endswith("/revoke")
+
+
+def test_garmin_import_and_load_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "garmin.json"
+    path.write_text(json.dumps(credential_payload()))
+    path.chmod(0o600)
+    secrets = MemorySecretStore()
+
+    GarminOAuthClient.import_credentials(path, secrets)
+    restored = GarminOAuthClient.load(secrets)
+
+    assert restored.credentials.resource_paths["dailies"].endswith("dailies")
+    with pytest.raises(GarminHealthError, match="not connected"):
+        restored.access_token()
+
+
 def test_garmin_api_uses_configured_partner_paths_and_bounded_epoch_window() -> None:
     requests: list[httpx.Request] = []
 
@@ -235,4 +298,33 @@ def test_garmin_connector_saves_checkpoint_after_storage(tmp_path: Path) -> None
     saved = state.load("garmin")
     assert saved["identity_hash"] != "garmin-user"
     assert saved["checkpoints"]["dailies"] == "2026-07-14T12:00:00Z"
+    assert connector.status()["connected"] is True
 
+
+def test_garmin_epoch_pulse_ox_and_respiration_normalizers() -> None:
+    base = {"summaryId": "summary", "startTimeInSeconds": 1784000000}
+
+    epochs = normalize_garmin_resource(
+        "epochs",
+        {**base, "steps": 10, "heartRate": 70, "activeKilocalories": 5},
+        allowed_metrics=ALLOWED,
+    )
+    pulse = normalize_garmin_resource(
+        "pulse_ox",
+        {**base, "averageSpO2": 97},
+        allowed_metrics=ALLOWED,
+    )
+    respiration = normalize_garmin_resource(
+        "respiration",
+        {**base, "avgWakingRespirationValue": 14.5},
+        allowed_metrics=ALLOWED,
+    )
+
+    assert {event["metric_type"] for event in epochs} == {
+        "steps",
+        "heart_rate",
+        "active_energy",
+    }
+    assert pulse[0]["value_numeric"] == 97
+    assert respiration[0]["value_numeric"] == 14.5
+    assert normalize_garmin_resource("unknown", base, allowed_metrics=ALLOWED) == []

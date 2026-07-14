@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -652,7 +652,7 @@ def _camel(value: str) -> str:
 
 
 def _number(value: object) -> float | int | None:
-    if isinstance(value, bool) or value is None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return None
     try:
         numeric = float(value)
@@ -699,4 +699,3 @@ def _parse_timestamp(value: object) -> datetime:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-

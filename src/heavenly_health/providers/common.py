@@ -53,7 +53,7 @@ class OAuthToken:
         if token_type.lower() != "bearer":
             raise ProviderConfigurationError("Provider returned an unsupported token type")
         expires_value = payload.get("expires_in", 3600)
-        if isinstance(expires_value, bool):
+        if isinstance(expires_value, bool) or not isinstance(expires_value, (str, int, float)):
             raise ProviderConfigurationError("Provider token lifetime is invalid")
         try:
             expires_in = int(expires_value)

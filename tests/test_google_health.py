@@ -128,6 +128,56 @@ def test_google_code_exchange_and_refresh_preserve_refresh_token_without_leaks()
     assert all("first-access" not in repr(request) for request in requests)
 
 
+def test_google_saved_token_access_and_revocation_lifecycle() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    secrets = MemorySecretStore()
+    credentials = GoogleClientCredentials.from_payload(client_json())
+    secrets.set(GoogleOAuthClient.SERVICE, GoogleOAuthClient.CLIENT_ACCOUNT, credentials.to_json())
+    secrets.set(
+        GoogleOAuthClient.SERVICE,
+        GoogleOAuthClient.TOKEN_ACCOUNT,
+        json.dumps(
+            {
+                "access_token": "live-access",
+                "refresh_token": "live-refresh",
+                "expires_at": "2026-07-14T13:00:00Z",
+                "scopes": list(GOOGLE_HEALTH_SCOPES),
+                "token_type": "Bearer",
+            }
+        ),
+    )
+    oauth = GoogleOAuthClient.load(
+        secrets,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        clock=lambda: NOW,
+    )
+
+    assert oauth.access_token() == "live-access"
+    oauth.revoke()
+
+    assert secrets.get(GoogleOAuthClient.SERVICE, GoogleOAuthClient.TOKEN_ACCOUNT) is None
+    assert requests[-1].url == httpx.URL("https://oauth2.googleapis.com/revoke")
+
+
+def test_google_import_credentials_and_missing_connection_fail_safely(tmp_path: Path) -> None:
+    path = tmp_path / "client.json"
+    path.write_text(json.dumps(client_json()))
+    path.chmod(0o600)
+    secrets = MemorySecretStore()
+
+    GoogleOAuthClient.import_credentials(path, secrets)
+    assert GoogleOAuthClient.load(secrets).credentials.redirect_uri == GOOGLE_CALLBACK_URL
+
+    secrets.delete(GoogleOAuthClient.SERVICE, GoogleOAuthClient.TOKEN_ACCOUNT)
+    with pytest.raises(GoogleHealthError, match="not connected"):
+        GoogleOAuthClient.load(secrets).access_token()
+
+
 def test_google_api_verifies_identity_and_pages_a_bounded_data_window() -> None:
     requests: list[httpx.Request] = []
 
@@ -161,6 +211,25 @@ def test_google_api_verifies_identity_and_pages_a_bounded_data_window() -> None:
 
     assert [point["name"] for point in points] == ["step-1", "step-2"]
     assert requests[-1].url.params["pageToken"] == "next-page"
+
+
+def test_google_api_rejects_unknown_data_type_and_invalid_identity() -> None:
+    api = GoogleHealthAPI(
+        token_provider=lambda: "token",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={}))
+        ),
+    )
+
+    with pytest.raises(GoogleHealthError, match="identity"):
+        api.identity()
+    with pytest.raises(GoogleHealthError, match="Unsupported"):
+        api.list_data_points(
+            "unknown",
+            start="2026-07-13T00:00:00Z",
+            end="2026-07-14T00:00:00Z",
+            limit=10,
+        )
 
 
 @pytest.mark.parametrize(
@@ -295,4 +364,24 @@ def test_google_connector_commits_checkpoint_only_after_raw_and_normalized_stora
     saved = state.load("google_health")
     assert saved["identity_hash"] != "stable-health-user"
     assert saved["checkpoints"]["steps"] == "2026-07-14T12:00:00Z"
+    assert connector.status()["connected"] is True
 
+
+def test_google_sleep_normalization_and_metric_scope_selection() -> None:
+    events = normalize_google_data_point(
+        "sleep",
+        {
+            "name": "users/1/dataTypes/sleep/dataPoints/a",
+            "sleep": {
+                "interval": {
+                    "startTime": "2026-07-14T00:00:00Z",
+                    "endTime": "2026-07-14T08:00:00Z",
+                }
+            },
+        },
+        allowed_metrics=frozenset({"sleep_analysis"}),
+    )
+
+    assert events[0]["value_numeric"] == 480
+    assert events[0]["unit"] == "min"
+    assert normalize_google_data_point("sleep", {}, allowed_metrics=frozenset({"steps"})) == []

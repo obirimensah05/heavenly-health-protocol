@@ -38,6 +38,30 @@ def test_oauth_token_parses_expiry_preserves_rotating_refresh_and_redacts() -> N
     assert "access-secret" not in repr(token)
     assert "refresh-secret" not in repr(token)
 
+    restored = OAuthToken.from_json(token.to_json())
+    assert restored.access_token == "access-secret"
+    assert restored.refresh_token == "refresh-secret"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"access_token": "token", "token_type": "MAC"},
+        {"access_token": "token", "expires_in": True},
+        {"access_token": "token", "expires_in": 1},
+        {"access_token": "token", "scope": {"invalid": True}},
+    ],
+)
+def test_oauth_token_rejects_malformed_provider_responses(payload) -> None:
+    with pytest.raises(ProviderConfigurationError):
+        OAuthToken.from_response(payload, now=NOW)
+
+
+def test_oauth_token_rejects_malformed_stored_json() -> None:
+    with pytest.raises(ProviderConfigurationError, match="Stored provider token"):
+        OAuthToken.from_json("not-json")
+
 
 @pytest.mark.parametrize(
     "url",
@@ -111,3 +135,6 @@ def test_provider_state_is_owner_only_atomic_and_rejects_secret_fields(tmp_path)
 
     store.delete("google_health")
     assert store.load("google_health") == {}
+
+    with pytest.raises(ProviderConfigurationError, match="Provider name"):
+        store.load("../escape")

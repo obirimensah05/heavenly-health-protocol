@@ -390,10 +390,10 @@ class GarminHealthAPI:
         for _ in range(100):
             payload = self._get(path, params=params)
             if isinstance(payload, list):
-                page = payload
+                page: list[Any] = payload
                 next_token = None
             elif isinstance(payload, Mapping):
-                page = next(
+                page_value = next(
                     (
                         payload.get(key)
                         for key in (resource_type, "summaries", "data", "items")
@@ -401,6 +401,7 @@ class GarminHealthAPI:
                     ),
                     [],
                 )
+                page = page_value if isinstance(page_value, list) else []
                 next_token = payload.get("nextPageToken")
             else:
                 raise GarminHealthError("Garmin resource response is invalid")
@@ -732,7 +733,7 @@ def _first_number(resource: Mapping[str, Any], *names: str) -> float | int | Non
 
 
 def _number(value: object) -> float | int | None:
-    if isinstance(value, bool) or value is None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return None
     try:
         numeric = float(value)
@@ -773,4 +774,3 @@ def _parse_timestamp(value: object) -> datetime:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-

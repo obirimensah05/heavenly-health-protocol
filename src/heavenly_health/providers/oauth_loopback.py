@@ -81,7 +81,7 @@ def receive_oauth_callback(
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, _format: str, *args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             return
 
     try:
@@ -103,4 +103,3 @@ def receive_oauth_callback(
     if not code:
         raise OAuthCallbackError("Provider authorization timed out")
     return OAuthCallbackResult(code=code)
-
