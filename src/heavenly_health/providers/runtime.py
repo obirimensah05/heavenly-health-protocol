@@ -26,7 +26,7 @@ from heavenly_health.providers.garmin import (
     GarminOAuthClient,
     resource_types_for_metrics,
 )
-from heavenly_health.providers.oauth_loopback import receive_oauth_callback
+from heavenly_health.providers.oauth_loopback import OAuthCallbackError, receive_oauth_callback
 
 
 class ProviderRuntime:
@@ -69,7 +69,7 @@ class ProviderRuntime:
     def connect_google(self, allowed_metrics: frozenset[str]) -> dict[str, Any]:
         oauth = GoogleOAuthClient.load(self.secret_store)
         request = oauth.authorization_request(allowed_metrics)
-        callback = receive_oauth_callback(
+        callback = _receive_callback(
             authorization_url=request.url,
             callback_url=oauth.credentials.redirect_uri,
             expected_state=request.state,
@@ -118,7 +118,7 @@ class ProviderRuntime:
     def connect_garmin(self, allowed_metrics: frozenset[str]) -> dict[str, Any]:
         oauth = GarminOAuthClient.load(self.secret_store)
         request = oauth.authorization_request()
-        callback = receive_oauth_callback(
+        callback = _receive_callback(
             authorization_url=request.url,
             callback_url=oauth.credentials.redirect_uri,
             expected_state=request.state,
@@ -194,6 +194,13 @@ class ProviderRuntime:
 
 def provider_state_store(path: Path | None = None) -> ProviderStateStore:
     return ProviderStateStore(path or default_provider_state_path())
+
+
+def _receive_callback(**kwargs: Any) -> Any:
+    try:
+        return receive_oauth_callback(**kwargs)
+    except OAuthCallbackError as error:
+        raise ProviderConfigurationError(str(error)) from error
 
 
 def _timestamp(value: datetime) -> str:

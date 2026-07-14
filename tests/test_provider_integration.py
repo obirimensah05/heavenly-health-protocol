@@ -230,7 +230,11 @@ def test_provider_runtime_turns_loopback_failure_into_safe_operator_error(
             }
         }
     )
-    secrets.set(GoogleOAuthClient.SERVICE, GoogleOAuthClient.CLIENT_ACCOUNT, credentials.to_json())
+    secrets.set(
+        GoogleOAuthClient.SERVICE,
+        GoogleOAuthClient.CLIENT_ACCOUNT,
+        credentials.to_json(),
+    )
     runtime = ProviderRuntime(
         secret_store=secrets,
         state_store=ProviderStateStore(tmp_path / "providers"),
