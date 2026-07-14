@@ -66,6 +66,10 @@ google_provider_app = typer.Typer(
     help="Manage the Google Health API v4 connector.",
     no_args_is_help=True,
 )
+garmin_provider_app = typer.Typer(
+    help="Manage an approved Garmin Connect Health API integration.",
+    no_args_is_help=True,
+)
 app.add_typer(access_app, name="access")
 access_app.add_typer(access_oauth_app, name="oauth")
 app.add_typer(runtime_app, name="runtime")
@@ -73,6 +77,7 @@ app.add_typer(approval_app, name="approval")
 app.add_typer(agent_app, name="agent")
 app.add_typer(provider_app, name="provider")
 provider_app.add_typer(google_provider_app, name="google-health")
+provider_app.add_typer(garmin_provider_app, name="garmin")
 
 
 @app.callback()
@@ -176,6 +181,53 @@ def google_disconnect(
         raise typer.Exit(code=1)
     _provider_output(
         lambda: _provider_runtime().disconnect_google(remove_client=remove_client)
+    )
+
+
+@garmin_provider_app.command("import-client")
+def garmin_import_client(path: Path = typer.Argument(..., exists=True, dir_okay=False)) -> None:
+    """Import owner-only Garmin partner OAuth/API JSON into the system vault."""
+    _provider_output(lambda: _provider_runtime().import_garmin_client(path))
+
+
+@garmin_provider_app.command("connect")
+def garmin_connect() -> None:
+    """Authorize Garmin through a one-shot loopback OAuth callback."""
+    def connect() -> object:
+        store = _configured_health_store()
+        return _provider_runtime().connect_garmin(store.settings.allowed_metrics)
+
+    _provider_output(connect)
+
+
+@garmin_provider_app.command("sync")
+def garmin_sync(
+    limit: int = typer.Option(1000, min=1, max=10_000),
+) -> None:
+    """Synchronize a bounded Garmin Health window into configured storage."""
+    _provider_output(
+        lambda: _provider_runtime().sync(
+            "garmin",
+            _configured_health_store(),
+            limit=limit,
+        )
+    )
+
+
+@garmin_provider_app.command("disconnect")
+def garmin_disconnect(
+    yes: bool = typer.Option(False, "--yes", help="Confirm revocation and local token deletion."),
+    remove_client: bool = typer.Option(
+        False,
+        "--remove-client",
+        help="Also remove the reusable Garmin partner client from the system vault.",
+    ),
+) -> None:
+    """Revoke Garmin access where configured and remove local connection state."""
+    if not yes and not typer.confirm("Disconnect Garmin and delete the local token?"):
+        raise typer.Exit(code=1)
+    _provider_output(
+        lambda: _provider_runtime().disconnect_garmin(remove_client=remove_client)
     )
 
 

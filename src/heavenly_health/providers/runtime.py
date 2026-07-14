@@ -20,6 +20,12 @@ from heavenly_health.providers.google_health import (
     GoogleOAuthClient,
     data_types_for_metrics,
 )
+from heavenly_health.providers.garmin import (
+    GarminHealthAPI,
+    GarminHealthConnector,
+    GarminOAuthClient,
+    resource_types_for_metrics,
+)
 from heavenly_health.providers.oauth_loopback import receive_oauth_callback
 
 
@@ -101,6 +107,73 @@ class ProviderRuntime:
         self.state_store.delete("google_health")
         return {"source": "google_health", "connected": False}
 
+    def import_garmin_client(self, path: Path) -> dict[str, Any]:
+        credentials = GarminOAuthClient.import_credentials(path, self.secret_store)
+        return {
+            "source": "garmin",
+            "client_configured": True,
+            "resources": len(credentials.resource_paths),
+        }
+
+    def connect_garmin(self, allowed_metrics: frozenset[str]) -> dict[str, Any]:
+        oauth = GarminOAuthClient.load(self.secret_store)
+        request = oauth.authorization_request()
+        callback = receive_oauth_callback(
+            authorization_url=request.url,
+            callback_url=oauth.credentials.redirect_uri,
+            expected_state=request.state,
+        )
+        token = oauth.exchange_code(callback.code, code_verifier=request.code_verifier)
+        identity_payload = GarminHealthAPI(
+            oauth.credentials,
+            oauth.access_token,
+        ).identity()
+        identity = next(
+            str(identity_payload[name])
+            for name in ("userId", "user_id", "id")
+            if name in identity_payload
+        )
+        resources = resource_types_for_metrics(
+            allowed_metrics,
+            configured=tuple(oauth.credentials.resource_paths),
+        )
+        if not resources:
+            raise ProviderConfigurationError(
+                "No Garmin partner resource maps to an allowlisted metric"
+            )
+        self.state_store.save(
+            "garmin",
+            {
+                "connected": True,
+                "identity_hash": hashlib.sha256(identity.encode()).hexdigest(),
+                "connected_at": _timestamp(datetime.now(timezone.utc)),
+                "last_sync_at": None,
+                "data_types": list(resources),
+                "checkpoints": {},
+            },
+        )
+        return {
+            "source": "garmin",
+            "connected": True,
+            "granted_scopes": len(token.scopes),
+            "data_types": list(resources),
+        }
+
+    def disconnect_garmin(self, *, remove_client: bool = False) -> dict[str, Any]:
+        oauth = GarminOAuthClient.load(self.secret_store)
+        remotely_revoked = oauth.revoke()
+        if remove_client:
+            self.secret_store.delete(
+                GarminOAuthClient.SERVICE,
+                GarminOAuthClient.CLIENT_ACCOUNT,
+            )
+        self.state_store.delete("garmin")
+        return {
+            "source": "garmin",
+            "connected": False,
+            "remote_revocation": remotely_revoked,
+        }
+
     def sync(self, source: str, store: Any, *, limit: int = 1000) -> dict[str, Any]:
         if source not in self.SOURCES:
             raise ProviderConfigurationError("Unsupported provider source")
@@ -112,9 +185,11 @@ class ProviderRuntime:
             oauth = GoogleOAuthClient.load(self.secret_store)
             api = GoogleHealthAPI(oauth.access_token)
             return GoogleHealthConnector(api, store, self.state_store)
-        raise ProviderConfigurationError(
-            "Garmin connector is not available until its implementation is installed"
-        )
+        if source == "garmin":
+            oauth = GarminOAuthClient.load(self.secret_store)
+            api = GarminHealthAPI(oauth.credentials, oauth.access_token)
+            return GarminHealthConnector(api, store, self.state_store)
+        raise ProviderConfigurationError("Unsupported provider source")
 
 
 def provider_state_store(path: Path | None = None) -> ProviderStateStore:
