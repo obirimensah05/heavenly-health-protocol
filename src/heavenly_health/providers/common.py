@@ -145,6 +145,44 @@ class MemorySecretStore:
         return f"MemorySecretStore(entries={len(self._values)})"
 
 
+class KeyringSecretStore:
+    """Store provider credentials in the operating system credential vault."""
+
+    def __init__(self, *, backend: Any | None = None) -> None:
+        if backend is None:
+            try:
+                import keyring
+            except ImportError as error:  # pragma: no cover - dependency invariant
+                raise ProviderConfigurationError("System credential storage is unavailable") from error
+            backend = keyring
+        self._backend = backend
+
+    def get(self, service: str, account: str) -> str | None:
+        try:
+            value = self._backend.get_password(service, account)
+        except Exception as error:
+            raise ProviderConfigurationError("System credential storage read failed") from error
+        return value if isinstance(value, str) and value else None
+
+    def set(self, service: str, account: str, value: str) -> None:
+        if not value:
+            raise ProviderConfigurationError("Empty provider secrets are not stored")
+        try:
+            self._backend.set_password(service, account, value)
+        except Exception as error:
+            raise ProviderConfigurationError("System credential storage write failed") from error
+
+    def delete(self, service: str, account: str) -> None:
+        try:
+            self._backend.delete_password(service, account)
+        except Exception as error:
+            if error.__class__.__name__ != "PasswordDeleteError":
+                raise ProviderConfigurationError("System credential deletion failed") from error
+
+    def __repr__(self) -> str:
+        return "KeyringSecretStore(backend=system)"
+
+
 class ProviderStateStore:
     """Persist only non-secret provider state in owner-only JSON files."""
 
@@ -331,4 +369,3 @@ def _aware(value: datetime) -> datetime:
 
 def _timestamp(value: datetime) -> str:
     return _aware(value).isoformat().replace("+00:00", "Z")
-

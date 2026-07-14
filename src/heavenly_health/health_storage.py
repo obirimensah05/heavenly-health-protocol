@@ -22,6 +22,9 @@ _SHA256 = re.compile(r"^[a-fA-F0-9]{64}$")
 _MAX_QUERY_DAYS = 31
 _MAX_QUERY_RESULTS = 200
 _MAX_SYNC_DELIVERIES = 100
+_PROVIDER_SOURCES = frozenset({"google_health", "garmin"})
+_PROVIDER_RESOURCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_PROVIDER_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_.-]{0,511}$")
 
 _PROVIDER_METRICS = {
     "step count": "steps",
@@ -328,8 +331,19 @@ class SupabaseHealthStore:
         return {"matches": matches, "count": len(matches)}
 
     def sync_source(self, source: str, *, limit: int = 25) -> dict[str, Any]:
+        if source in _PROVIDER_SOURCES:
+            try:
+                from heavenly_health.providers.runtime import ProviderRuntime
+
+                return ProviderRuntime().sync(source, self, limit=limit)
+            except Exception as error:
+                from heavenly_health.providers.common import ProviderConfigurationError
+
+                if isinstance(error, ProviderConfigurationError):
+                    raise HealthStorageError(str(error)) from error
+                raise
         if source != "health_auto_export":
-            raise HealthStorageError("Only the configured health_auto_export source can be synced")
+            raise HealthStorageError("The requested health source is not supported")
         delivery_table = self.settings.apple_health_delivery_table
         if not delivery_table:
             raise HealthStorageError("health_auto_export sync is not configured")
@@ -373,6 +387,90 @@ class SupabaseHealthStore:
             "events_upserted": events_upserted,
             "status": "completed",
         }
+
+    def ingest_provider_resource(
+        self,
+        *,
+        source: str,
+        resource_type: str,
+        source_record_id: str,
+        event_at: str,
+        payload: Mapping[str, Any],
+        events: Sequence[Mapping[str, Any]],
+        ingest_mode: str,
+    ) -> int:
+        """Persist one provider record before its allowlisted normalized events."""
+        if source not in _PROVIDER_SOURCES:
+            raise HealthStorageError("Unsupported provider source")
+        if _PROVIDER_RESOURCE.fullmatch(resource_type) is None:
+            raise HealthStorageError("Provider resource type is invalid")
+        if _PROVIDER_RECORD_ID.fullmatch(source_record_id) is None:
+            raise HealthStorageError("Provider source record identity is invalid")
+        normalized_time = _format_timestamp(_parse_timestamp("provider event_at", event_at))
+        if ingest_mode not in {"live", "backfill"}:
+            raise HealthStorageError("Provider ingest mode is invalid")
+        if not isinstance(payload, Mapping):
+            raise HealthStorageError("Provider payload must be a JSON object")
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        normalized_events: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for event in events:
+            item = dict(event)
+            if item.get("source") != source:
+                raise HealthStorageError("Normalized provider event source does not match")
+            metric = item.get("metric_type")
+            if not isinstance(metric, str) or metric not in self.settings.allowed_metrics:
+                raise HealthStorageError("Normalized provider metric is not allowed")
+            identity = item.get("source_record_id")
+            if (
+                not isinstance(identity, str)
+                or _PROVIDER_RECORD_ID.fullmatch(identity) is None
+                or identity in seen_ids
+            ):
+                raise HealthStorageError("Normalized provider event identity is invalid")
+            seen_ids.add(identity)
+            item["event_at"] = _format_timestamp(
+                _parse_timestamp("normalized provider event_at", str(item.get("event_at", "")))
+            )
+            item["is_synthetic"] = False
+            item["ingest_mode"] = ingest_mode
+            normalized_events.append(item)
+        raw = {
+            "source": source,
+            "resource_type": resource_type,
+            "source_record_id": source_record_id,
+            "event_at": normalized_time,
+            "payload": dict(payload),
+            "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "is_synthetic": False,
+            "ingest_mode": ingest_mode,
+        }
+        saved_raw = self._request_json(
+            "POST",
+            self.settings.raw_health_table,
+            params={"on_conflict": "source,source_record_id"},
+            json_body=raw,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        if not isinstance(saved_raw, list) or not saved_raw or not isinstance(saved_raw[0], Mapping):
+            raise HealthStorageError("Supabase did not confirm provider raw provenance storage")
+        raw_id = saved_raw[0].get("id")
+        if not isinstance(raw_id, str):
+            raise HealthStorageError("Supabase did not return provider raw provenance identity")
+        for item in normalized_events:
+            item["raw_event_id"] = raw_id
+        if not normalized_events:
+            return 0
+        saved_events = self._request_json(
+            "POST",
+            self.settings.health_table,
+            params={"on_conflict": "source,source_record_id"},
+            json_body=normalized_events,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        if not isinstance(saved_events, list):
+            raise HealthStorageError("Supabase returned an unexpected normalized provider response")
+        return len(saved_events)
 
     def build_manual_event(
         self,

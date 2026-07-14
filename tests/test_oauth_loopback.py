@@ -21,10 +21,13 @@ def _free_port() -> int:
 def test_loopback_receiver_accepts_one_matching_state_without_logging_query() -> None:
     port = _free_port()
     callback = f"http://127.0.0.1:{port}/providers/google-health/oauth/callback"
+    expected_state = "s" * 32
 
     def open_browser(_url: str) -> bool:
         def callback_request() -> None:
-            with urllib.request.urlopen(f"{callback}?code=one-time-code&state=expected", timeout=5) as response:
+            with urllib.request.urlopen(
+                f"{callback}?code=one-time-code&state={expected_state}", timeout=5
+            ) as response:
                 assert response.status == 200
 
         threading.Thread(target=callback_request, daemon=True).start()
@@ -33,7 +36,7 @@ def test_loopback_receiver_accepts_one_matching_state_without_logging_query() ->
     result = receive_oauth_callback(
         authorization_url="https://accounts.google.com/o/oauth2/v2/auth?redacted=yes",
         callback_url=callback,
-        expected_state="expected",
+        expected_state=expected_state,
         open_browser=open_browser,
         timeout_seconds=5,
     )
@@ -59,8 +62,7 @@ def test_loopback_receiver_rejects_wrong_state() -> None:
         receive_oauth_callback(
             authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
             callback_url=callback,
-            expected_state="expected",
+            expected_state="s" * 32,
             open_browser=open_browser,
             timeout_seconds=5,
         )
-
