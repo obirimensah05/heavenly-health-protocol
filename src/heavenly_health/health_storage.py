@@ -142,10 +142,12 @@ class SupabaseHealthStore:
         *,
         http_client: httpx.Client | None = None,
         clock: Callable[[], datetime] | None = None,
+        provider_runtime: Any | None = None,
     ) -> None:
         self.settings = settings
         self._client = http_client or httpx.Client(timeout=30)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._provider_runtime = provider_runtime
 
     def query_events(
         self,
@@ -262,6 +264,8 @@ class SupabaseHealthStore:
                 else:
                     item["freshness"] = "fresh" if age <= timedelta(hours=48) else "stale"
             configured.append(item)
+        if self._provider_runtime is not None:
+            configured.extend(self._provider_runtime.statuses())
         return {"storage": "supabase", "configured_connectors": configured}
 
     def event_provenance(self, event_id: str) -> dict[str, Any]:
@@ -333,9 +337,12 @@ class SupabaseHealthStore:
     def sync_source(self, source: str, *, limit: int = 25) -> dict[str, Any]:
         if source in _PROVIDER_SOURCES:
             try:
-                from heavenly_health.providers.runtime import ProviderRuntime
+                runtime = self._provider_runtime
+                if runtime is None:
+                    from heavenly_health.providers.runtime import ProviderRuntime
 
-                return ProviderRuntime().sync(source, self, limit=limit)
+                    runtime = ProviderRuntime()
+                return runtime.sync(source, self, limit=limit)
             except Exception as error:
                 from heavenly_health.providers.common import ProviderConfigurationError
 

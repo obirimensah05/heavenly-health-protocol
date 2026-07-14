@@ -119,7 +119,7 @@ def _configured_health_store() -> SupabaseHealthStore:
         raise ProviderConfigurationError(
             "Supabase storage is required before provider synchronization"
         )
-    return SupabaseHealthStore(settings)
+    return SupabaseHealthStore(settings, provider_runtime=_provider_runtime())
 
 
 def _provider_output(action: Callable[[], object]) -> None:

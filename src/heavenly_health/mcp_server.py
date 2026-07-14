@@ -30,6 +30,7 @@ from heavenly_health.cloudflare_managed_oauth import (
     CloudflareManagedOAuthSettings,
 )
 from heavenly_health.health_storage import SupabaseHealthStore, SupabaseSettings
+from heavenly_health.providers.runtime import ProviderRuntime
 from heavenly_health.oauth_runtime import OAuthRuntimeSettings, OAuthSettingsError
 
 SERVER_NAME = "Heavenly Health Protocol"
@@ -380,7 +381,12 @@ def create_oauth_http_app(server: Any, security: TransportSecuritySettings) -> A
 
 
 _storage_settings = SupabaseSettings.from_environ(os.environ)
-_health_store = SupabaseHealthStore(_storage_settings) if _storage_settings else None
+_provider_runtime = ProviderRuntime() if _storage_settings else None
+_health_store = (
+    SupabaseHealthStore(_storage_settings, provider_runtime=_provider_runtime)
+    if _storage_settings
+    else None
+)
 _approval_store = ApprovalStore(approval_state_path(os.environ)) if _health_store else None
 _oauth_settings, _managed_access_settings = resolve_auth_modes(os.environ)
 _managed_access_verifier = (
