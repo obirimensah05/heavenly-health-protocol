@@ -1,0 +1,32 @@
+services:
+  heavenly-mcp:
+    build:
+      context: .
+    image: heavenly-health-protocol:local
+    environment:
+      HEAVENLY_MCP_HOST: 0.0.0.0
+      HEAVENLY_MCP_PORT: "8791"
+      # Set only for a protected remote deployment, e.g. health-mcp.example.com.
+      HEAVENLY_MCP_PUBLIC_HOST: ${HEAVENLY_MCP_PUBLIC_HOST:-}
+      # Reserved durable state path for a separately configured OAuth deployment.
+      HEAVENLY_OAUTH_STATE_DIR: /home/heavenly/data/oauth-state
+    ports:
+      - "127.0.0.1:8791:8791"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - heavenly_data:/home/heavenly/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 8791), 2); s.close()"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  heavenly_data:

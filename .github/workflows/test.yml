@@ -1,0 +1,44 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.8"
+      - run: uv sync --extra dev --locked
+      - run: uv lock --check
+      - run: uv run ruff check src tests
+      - run: uv run pyright src
+      - run: uv export --format requirements-txt --all-extras --no-hashes --output-file /tmp/heavenly-requirements.txt
+      - run: uv run pip-audit --requirement /tmp/heavenly-requirements.txt --no-deps --disable-pip --progress-spinner off
+      - name: Audit the tracked public release surface
+        run: |
+          uv run python - <<'PY'
+          import subprocess
+          from pathlib import Path
+          from heavenly_health.public_release import validate_public_tree
+
+          manifest = subprocess.run(
+              ["git", "ls-files", "-z"],
+              check=True,
+              capture_output=True,
+          ).stdout.decode().split("\0")
+          validated = validate_public_tree(Path.cwd(), [path for path in manifest if path])
+          print(f"Validated {len(validated)} tracked public files")
+          PY
+      - run: uv run --extra dev pytest --cov=src/heavenly_health --cov-report=term-missing --cov-fail-under=80
+      - run: uv run python -m compileall -q src tests
+      - run: uv build
+      - run: docker compose config >/dev/null
+      - run: uv run heavenly setup --preview

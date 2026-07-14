@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Credentials and local state
+.env
+.env.*
+!.env.example
+secrets/
+data/
+state/
+*.sqlite
+*.sqlite3
+
+# Editors, local agent plans, and OS
+.DS_Store
+.idea/
+.vscode/
+.hermes/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
