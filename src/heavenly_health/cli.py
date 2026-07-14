@@ -606,7 +606,9 @@ def setup(
         console.print(
             Panel(
                 "Interactive setup is the next implementation slice.\n"
-                "Use [bold]heavenly setup --preview[/bold] to review the design now.",
+                "Use [bold]heavenly setup --preview[/bold] to review the design now.\n"
+                "Implemented Google Health and Garmin operations are under "
+                "[bold]heavenly provider[/bold].",
                 title="Heavenly Health Protocol",
                 border_style="cyan",
             )
@@ -644,9 +646,9 @@ def setup(
     console.print("  Clinical records, medication, reproductive data, ECG, and routes stay off by default.")
 
     _heading(6, "Provider requirements")
-    console.print("  WHOOP: public privacy policy check.")
-    console.print("  Oura: public website, privacy policy, and terms check.")
-    console.print("  If required URLs are missing, Heavenly can generate a reviewable GitHub Pages starter — never with keys or health data.")
+    console.print("  Google Health API v4: implemented native connector.")
+    console.print("  Garmin: implemented connector; Developer Program approval required.")
+    console.print("  WHOOP and Oura: reviewed specifications; adapters are not implemented.")
 
 
 if __name__ == "__main__":
