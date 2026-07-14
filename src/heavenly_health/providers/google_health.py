@@ -330,8 +330,9 @@ class GoogleHealthAPI:
         if data_type not in _DATA_TYPE_METRICS:
             raise GoogleHealthError("Unsupported Google Health data type")
         bounded_limit = max(1, min(int(limit), 10_000))
+        page_limit = 25 if data_type == "sleep" else 10_000
         params: dict[str, str] = {
-            "pageSize": str(min(bounded_limit, 1000)),
+            "pageSize": str(min(bounded_limit, page_limit)),
             "filter": _google_filter(data_type, start, end),
         }
         points: list[dict[str, Any]] = []
