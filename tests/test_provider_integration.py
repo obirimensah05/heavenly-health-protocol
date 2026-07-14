@@ -145,3 +145,62 @@ def test_provider_runtime_reports_and_dispatches_google_without_exposing_secrets
     assert result == {"status": "completed"}
     assert observed == [("google_health", {"limit": 25})]
 
+
+def test_provider_runtime_connects_google_and_persists_only_pseudonymous_state(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from heavenly_health.providers.google_health import GoogleClientCredentials
+    from heavenly_health.providers.oauth_loopback import OAuthCallbackResult
+
+    secrets = MemorySecretStore()
+    credentials = GoogleClientCredentials.from_payload(
+        {
+            "web": {
+                "client_id": "client.apps.googleusercontent.com",
+                "client_secret": "client-secret",
+                "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [
+                    "http://127.0.0.1:8791/providers/google-health/oauth/callback"
+                ],
+            }
+        }
+    )
+    secrets.set(
+        GoogleOAuthClient.SERVICE,
+        GoogleOAuthClient.CLIENT_ACCOUNT,
+        credentials.to_json(),
+    )
+    state = ProviderStateStore(tmp_path / "providers")
+    runtime = ProviderRuntime(secret_store=secrets, state_store=state)
+
+    monkeypatch.setattr(
+        "heavenly_health.providers.runtime.receive_oauth_callback",
+        lambda **_kwargs: OAuthCallbackResult(code="one-time-code"),
+    )
+    monkeypatch.setattr(
+        GoogleOAuthClient,
+        "exchange_code",
+        lambda self, code, *, code_verifier: type(
+            "Token",
+            (),
+            {"scopes": frozenset({"scope-a"})},
+        )(),
+    )
+    monkeypatch.setattr(
+        "heavenly_health.providers.runtime.GoogleHealthAPI.identity",
+        lambda self: {"healthUserId": "private-google-identity"},
+    )
+
+    result = runtime.connect_google(frozenset({"steps"}))
+
+    assert result == {
+        "source": "google_health",
+        "connected": True,
+        "granted_scopes": 1,
+        "data_types": ["steps"],
+    }
+    saved = state.load("google_health")
+    assert saved["identity_hash"] != "private-google-identity"
+    assert "private-google-identity" not in repr(saved)
