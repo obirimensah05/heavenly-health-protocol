@@ -38,7 +38,8 @@ _SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"),
     re.compile(
         r"(?im)^\s*[A-Za-z_][A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY)"
-        r"\s*=\s*['\"]?[A-Za-z0-9_./+=:-]{20,}"
+        r"\s*=\s*(?!['\"]?https?://)['\"]?[A-Za-z0-9_./+=:-]{20,}['\"]?"
+        r"\s*(?:#.*)?$"
     ),
 )
 
