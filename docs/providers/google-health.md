@@ -149,10 +149,19 @@ If identity succeeds but reads are empty, confirm that the same Google account i
 ## 7. Backfill, retries, deduplication, and delayed behavior
 
 - Backfill bounded data-type/time windows and follow `nextPageToken`; commit the checkpoint only after durable storage.
-- Retry transport errors, `429`, and `5xx` with bounded exponential backoff and jitter, honoring `Retry-After`. Refresh once on an expired access token. Do not loop on `invalid_grant`, `401`, or scope/verification `403`.
-- Store immutable raw resources under `google-health:{data_type}:{native_resource_id}`. If no stable ID exists, hash canonical provider, connection pseudonym, type, original timestamps, value, and unit. Derive normalized metric IDs from the raw ID.
+- Retry transport errors, `429`, and `5xx` at most twice after the initial
+  attempt, using exponential jitter capped at five seconds and honoring a safe
+  numeric `Retry-After`. Do not loop on `invalid_grant`, `401`, or
+  scope/verification `403`.
+- Store immutable raw resources under
+  `google-health:{data_type}:{sha256(native_resource_identity)}`. If no stable
+  provider name exists, hash the canonical payload. Derive normalized metric
+  IDs from the raw identity.
 - Upsert on stable IDs. Overlap polling windows to catch delayed/revised sync without duplicates. Preserve data source/provenance.
-- Fitbit/device → Google cloud sync and computed daily metrics may lag. Record `data_through`; missing is unknown, not zero. If the device or Heavenly is offline, resume from the durable checkpoint with overlap after reconnect.
+- Fitbit/device → Google cloud sync and computed daily metrics may lag. Record
+  the last synchronization and per-type checkpoint; missing is unknown, not
+  zero. If the device or Heavenly is offline, resume from the durable checkpoint
+  with overlap after reconnect.
 - Notifications/webhooks are not implemented. The connector uses explicit
   bounded pull synchronization with a one-hour checkpoint overlap.
 
@@ -161,7 +170,7 @@ If identity succeeds but reads are empty, confirm that the same Google account i
 | Symptom | Action |
 | --- | --- |
 | `redirect_uri_mismatch` | Register and send exactly `http://127.0.0.1:8791/providers/google-health/oauth/callback`; check listener port and trailing slash |
-| Callback cannot connect | Start Heavenly first; verify port 8791 is free and bound only to loopback |
+| Callback cannot connect | Stop the native MCP, rerun `provider google-health connect`, and verify port 8791 is free for the one-shot loopback receiver |
 | `access_denied` / app blocked | Confirm user is in Test users, consent configuration is complete, scopes are allowed, and verification status supports the audience |
 | Refresh fails after 7 days | Expected in Testing; reconnect. Move to In Production only when ready, without claiming verification is complete |
 | No refresh token | Re-run initial/recovery consent once with `access_type=offline&prompt=consent`; do not force consent routinely |

@@ -111,6 +111,9 @@ upload-time epoch parameters, follows partner pagination, and processes at most
 the requested limit (hard maximum 10,000). Each raw record is upserted before
 allowlisted normalized events. Later syncs overlap each checkpoint by one hour
 to catch delayed/revised Garmin Connect uploads without duplicate identities.
+Transient transport errors, `429`, and `5xx` responses are retried at most twice
+after the initial attempt with a five-second delay cap; authorization and other
+client errors fail immediately.
 
 Garmin supports both push and ping/pull architectures, but this release
 implements explicit ping/pull only. It does not create subscriptions, expose a
