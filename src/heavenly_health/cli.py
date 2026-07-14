@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import Callable, NoReturn
 
 import typer
 from rich.console import Console
@@ -33,6 +33,10 @@ from heavenly_health.cloudflare_managed_oauth import (
     configure_runtime_from_access_assertion,
 )
 from heavenly_health.launcher import DEFAULT_RUNTIME_ENV
+from heavenly_health.health_storage import HealthStorageError, SupabaseHealthStore, SupabaseSettings
+from heavenly_health.providers.common import ProviderConfigurationError
+from heavenly_health.providers.runtime import ProviderRuntime
+from heavenly_health.secret_loader import SecretFileError, load_runtime_environment
 
 app = typer.Typer(
     add_completion=False,
@@ -54,11 +58,21 @@ agent_app = typer.Typer(
     help="Run any CLI agent in an explicitly constrained Docker container.",
     no_args_is_help=True,
 )
+provider_app = typer.Typer(
+    help="Connect, synchronize, inspect, or disconnect health data providers.",
+    no_args_is_help=True,
+)
+google_provider_app = typer.Typer(
+    help="Manage the Google Health API v4 connector.",
+    no_args_is_help=True,
+)
 app.add_typer(access_app, name="access")
 access_app.add_typer(access_oauth_app, name="oauth")
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(approval_app, name="approval")
 app.add_typer(agent_app, name="agent")
+app.add_typer(provider_app, name="provider")
+provider_app.add_typer(google_provider_app, name="google-health")
 
 
 @app.callback()
@@ -80,6 +94,89 @@ def _managed_oauth_client() -> CloudflareManagedOAuthClient:
 
 def _agent_sandbox() -> DockerAgentSandbox:
     return DockerAgentSandbox()
+
+
+def _provider_runtime() -> ProviderRuntime:
+    return ProviderRuntime()
+
+
+def _load_cli_runtime_environment() -> None:
+    configured = os.environ.get("HEAVENLY_SECRET_FILE", "").strip()
+    runtime_file = Path(configured).expanduser() if configured else DEFAULT_RUNTIME_ENV
+    if configured or runtime_file.exists():
+        load_runtime_environment(runtime_file)
+
+
+def _configured_health_store() -> SupabaseHealthStore:
+    _load_cli_runtime_environment()
+    settings = SupabaseSettings.from_environ(os.environ)
+    if settings is None:
+        raise ProviderConfigurationError(
+            "Supabase storage is required before provider synchronization"
+        )
+    return SupabaseHealthStore(settings)
+
+
+def _provider_output(action: Callable[[], object]) -> None:
+    try:
+        result = action()
+    except (ProviderConfigurationError, HealthStorageError, SecretFileError) as error:
+        console.print(f"[red]Provider operation failed: {error}[/red]")
+        raise typer.Exit(code=1) from error
+    console.print(json.dumps(result, indent=2, sort_keys=True))
+
+
+@provider_app.command("status")
+def provider_status() -> None:
+    """Show redacted connection and synchronization status."""
+    _provider_output(lambda: {"providers": _provider_runtime().statuses()})
+
+
+@google_provider_app.command("import-client")
+def google_import_client(path: Path = typer.Argument(..., exists=True, dir_okay=False)) -> None:
+    """Import one owner-only Google Web OAuth client JSON into the system vault."""
+    _provider_output(lambda: _provider_runtime().import_google_client(path))
+
+
+@google_provider_app.command("connect")
+def google_connect() -> None:
+    """Authorize Google Health through a one-shot loopback OAuth callback."""
+    def connect() -> object:
+        store = _configured_health_store()
+        return _provider_runtime().connect_google(store.settings.allowed_metrics)
+
+    _provider_output(connect)
+
+
+@google_provider_app.command("sync")
+def google_sync(
+    limit: int = typer.Option(1000, min=1, max=10_000),
+) -> None:
+    """Synchronize a bounded Google Health window into configured storage."""
+    _provider_output(
+        lambda: _provider_runtime().sync(
+            "google_health",
+            _configured_health_store(),
+            limit=limit,
+        )
+    )
+
+
+@google_provider_app.command("disconnect")
+def google_disconnect(
+    yes: bool = typer.Option(False, "--yes", help="Confirm revocation and local token deletion."),
+    remove_client: bool = typer.Option(
+        False,
+        "--remove-client",
+        help="Also remove the reusable Google OAuth client from the system vault.",
+    ),
+) -> None:
+    """Revoke the Google grant and remove local connection state."""
+    if not yes and not typer.confirm("Revoke Google Health access and delete the local token?"):
+        raise typer.Exit(code=1)
+    _provider_output(
+        lambda: _provider_runtime().disconnect_google(remove_client=remove_client)
+    )
 
 
 def _managed_oauth_host(host: str | None) -> str:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,7 +18,9 @@ from heavenly_health.providers.google_health import (
     GoogleHealthAPI,
     GoogleHealthConnector,
     GoogleOAuthClient,
+    data_types_for_metrics,
 )
+from heavenly_health.providers.oauth_loopback import receive_oauth_callback
 
 
 class ProviderRuntime:
@@ -52,6 +56,51 @@ class ProviderRuntime:
             )
         return statuses
 
+    def import_google_client(self, path: Path) -> dict[str, Any]:
+        GoogleOAuthClient.import_credentials(path, self.secret_store)
+        return {"source": "google_health", "client_configured": True}
+
+    def connect_google(self, allowed_metrics: frozenset[str]) -> dict[str, Any]:
+        oauth = GoogleOAuthClient.load(self.secret_store)
+        request = oauth.authorization_request(allowed_metrics)
+        callback = receive_oauth_callback(
+            authorization_url=request.url,
+            callback_url=oauth.credentials.redirect_uri,
+            expected_state=request.state,
+        )
+        token = oauth.exchange_code(callback.code, code_verifier=request.code_verifier)
+        identity = GoogleHealthAPI(oauth.access_token).identity()
+        identity_value = str(identity["healthUserId"])
+        data_types = data_types_for_metrics(allowed_metrics)
+        self.state_store.save(
+            "google_health",
+            {
+                "connected": True,
+                "identity_hash": hashlib.sha256(identity_value.encode()).hexdigest(),
+                "connected_at": _timestamp(datetime.now(timezone.utc)),
+                "last_sync_at": None,
+                "data_types": list(data_types),
+                "checkpoints": {},
+            },
+        )
+        return {
+            "source": "google_health",
+            "connected": True,
+            "granted_scopes": len(token.scopes),
+            "data_types": list(data_types),
+        }
+
+    def disconnect_google(self, *, remove_client: bool = False) -> dict[str, Any]:
+        oauth = GoogleOAuthClient.load(self.secret_store)
+        oauth.revoke()
+        if remove_client:
+            self.secret_store.delete(
+                GoogleOAuthClient.SERVICE,
+                GoogleOAuthClient.CLIENT_ACCOUNT,
+            )
+        self.state_store.delete("google_health")
+        return {"source": "google_health", "connected": False}
+
     def sync(self, source: str, store: Any, *, limit: int = 1000) -> dict[str, Any]:
         if source not in self.SOURCES:
             raise ProviderConfigurationError("Unsupported provider source")
@@ -71,3 +120,6 @@ class ProviderRuntime:
 def provider_state_store(path: Path | None = None) -> ProviderStateStore:
     return ProviderStateStore(path or default_provider_state_path())
 
+
+def _timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
