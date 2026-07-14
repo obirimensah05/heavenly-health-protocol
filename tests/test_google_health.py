@@ -232,6 +232,27 @@ def test_google_api_rejects_unknown_data_type_and_invalid_identity() -> None:
         )
 
 
+def test_google_sleep_page_size_respects_provider_limit() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"dataPoints": []})
+
+    api = GoogleHealthAPI(
+        token_provider=lambda: "token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    api.list_data_points(
+        "sleep",
+        start="2026-07-13T00:00:00Z",
+        end="2026-07-14T00:00:00Z",
+        limit=1000,
+    )
+
+    assert requests[0].url.params["pageSize"] == "25"
+
+
 @pytest.mark.parametrize(
     ("data_type", "point", "metric", "value", "unit"),
     [
