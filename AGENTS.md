@@ -31,10 +31,13 @@ runtime requirement.
 - Keep Docker, tunnel reconciliation, origin JWT validation, and the CLI-agent
   sandbox in advanced operator documentation.
 - Clearly distinguish implemented adapters from provider specifications. Google
-  Health API v4 is implemented for native use. Garmin is implemented against
-  imported partner-issued endpoints but cannot be described as live-verified
-  without an approved Garmin evaluation account. WHOOP, Oura, and Health Connect
-  remain specifications until corresponding code and live verification exist.
+  Health API v4 is implemented and live-verified for native use. Garmin, WHOOP,
+  and Oura are implemented (native OAuth, bounded sync, refresh, revocation, and
+  record normalization), but their live-data paths depend on account access and
+  are not yet verified against real records: Garmin needs an approved Garmin
+  evaluation account, WHOOP an active membership, and Oura recent data within the
+  granted scopes. Health Connect remains a specification until corresponding code
+  and live verification exist.
 
 ## Runtime invariants
 

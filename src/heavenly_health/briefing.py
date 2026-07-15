@@ -11,7 +11,7 @@ Only non-secret schedule fields are read. Credentials never pass through here.
 
 from __future__ import annotations
 
-from datetime import datetime, time as clock_time, timedelta
+from datetime import date, datetime, time as clock_time, timedelta
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -45,17 +45,29 @@ def briefing_schedule(
     if local_time is None or zone is None:
         return dict(_UNCONFIGURED)
 
-    next_briefing = _next_occurrence(local_time, zone, reference)
-    fetch_at = next_briefing - timedelta(minutes=FETCH_LEAD_MINUTES)
     frequency = str(schedule.get("frequency") or "daily")
+    frequency_days = _FREQUENCY_DAYS.get(frequency, 1)
+    # Non-daily cadences need a fixed reference day; without a persisted anchor we
+    # fall back to today, which is only exact for daily schedules.
+    anchor = _parse_date(schedule.get("anchor_date")) or reference.astimezone(zone).date()
+
+    next_briefing = _next_briefing(
+        local_time,
+        zone,
+        reference,
+        frequency_days=frequency_days,
+        anchor=anchor,
+    )
+    fetch_at = next_briefing - timedelta(minutes=FETCH_LEAD_MINUTES)
 
     return {
         "configured": True,
         "frequency": frequency,
-        "frequency_days": _FREQUENCY_DAYS.get(frequency, 1),
+        "frequency_days": frequency_days,
         "arrival": schedule.get("arrival"),
         "local_time": local_time.strftime("%H:%M"),
         "timezone": schedule.get("timezone"),
+        "anchor_date": anchor.isoformat(),
         "next_briefing_at": next_briefing.isoformat(),
         "recommended_fetch_at": fetch_at.isoformat(),
         "fetch_lead_minutes": FETCH_LEAD_MINUTES,
@@ -106,14 +118,31 @@ def _parse_zone(value: Any) -> ZoneInfo | None:
         return None
 
 
-def _next_occurrence(local_time: clock_time, zone: ZoneInfo, now: datetime) -> datetime:
+def _parse_date(value: Any) -> date | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+
+
+def _next_briefing(
+    local_time: clock_time,
+    zone: ZoneInfo,
+    now: datetime,
+    *,
+    frequency_days: int,
+    anchor: date,
+) -> datetime:
+    """Next delivery datetime on the cadence, measured in whole days from ``anchor``."""
     local_now = now.astimezone(zone)
-    candidate = local_now.replace(
-        hour=local_time.hour,
-        minute=local_time.minute,
-        second=0,
-        microsecond=0,
-    )
+    day = max(local_now.date(), anchor)
+    # Step forward to the first day that lands on the cadence relative to the anchor.
+    lag = (day - anchor).days % frequency_days
+    if lag:
+        day += timedelta(days=frequency_days - lag)
+    candidate = datetime.combine(day, local_time, tzinfo=zone)
     if candidate <= local_now:
-        candidate += timedelta(days=1)
+        candidate += timedelta(days=frequency_days)
     return candidate

@@ -89,6 +89,12 @@ def test_saved_answers_never_contain_secrets() -> None:
     assert payload["schedule"]["time"] == "09:30"
 
 
+def test_schedule_payload_carries_the_cadence_anchor() -> None:
+    payload = answers_payload(_answers(frequency="weekly", anchor_date="2026-07-15"))
+    assert payload["schedule"]["frequency"] == "weekly"
+    assert payload["schedule"]["anchor_date"] == "2026-07-15"
+
+
 def test_every_agent_connect_instruction_points_at_the_local_mcp_url() -> None:
     for agent in ("claude_code", "claude", "chatgpt", "codex", "hermes", "openclaw", "other"):
         joined = "\n".join(connect_instructions(agent, remote=False))

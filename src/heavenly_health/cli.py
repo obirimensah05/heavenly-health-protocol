@@ -835,6 +835,7 @@ def _run_onboarding_wizard() -> None:
         arrival=arrival,
         briefing_time=briefing_time,
         timezone=detected_timezone,
+        anchor_date=datetime.now().date().isoformat(),
     )
 
     _heading(6, "Tracking permissions", total)

@@ -142,6 +142,9 @@ class OnboardingAnswers:
     arrival: str
     briefing_time: str
     timezone: str
+    # Fixed reference day for non-daily cadences; an agent measures the briefing
+    # cadence in whole days from here. Empty means "unset" (treated as today).
+    anchor_date: str = ""
 
     def metrics(self) -> tuple[str, ...]:
         return metrics_for_sources((self.source_app,))
@@ -194,6 +197,7 @@ def answers_payload(answers: OnboardingAnswers) -> dict[str, object]:
             "arrival": answers.arrival,
             "time": answers.briefing_time,
             "timezone": answers.timezone,
+            "anchor_date": answers.anchor_date,
         },
         "metrics": list(answers.metrics()),
     }
