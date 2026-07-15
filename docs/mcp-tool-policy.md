@@ -18,6 +18,7 @@ The following read/status actions become available only after the owner enables 
 validated storage adapter:
 
 ```text
+health_briefing_schedule         # non-secret schedule so an agent can self-schedule
 health_connector_status
 health_available_metrics
 query_health_events
@@ -25,6 +26,12 @@ health_event_provenance
 search_personal_context          # only when an explicit context relation exists
 sync_health_source               # only a configured, bounded connector
 ```
+
+`health_briefing_schedule` returns only the owner's non-secret briefing cadence,
+local delivery time, timezone, and the fetch lead (`recommended_fetch_at`,
+`fetch_lead_minutes`). It never exposes credentials or storage connection values.
+It is available before storage is enabled so an agent can plan its own wake job:
+fetch a fetch-lead before `next_briefing_at`, then sync and query.
 
 Health queries require an explicit metric allowlist, timezone-aware start/end,
 maximum 31-day window, and maximum 200 rows. Provenance returns source linkage but

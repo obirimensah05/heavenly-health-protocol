@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from cryptography.fernet import Fernet
 from fastmcp.exceptions import ToolError
@@ -415,6 +416,7 @@ def test_storage_enabled_server_registers_real_tools_but_no_agent_approval_tool(
 
     assert tools == {
         "protocol_status",
+        "health_briefing_schedule",
         "health_connector_status",
         "health_available_metrics",
         "query_health_events",
@@ -426,6 +428,36 @@ def test_storage_enabled_server_registers_real_tools_but_no_agent_approval_tool(
         "search_personal_context",
     }
     assert "approve_health_event_write" not in tools
+
+
+def test_briefing_schedule_tool_is_available_without_storage(tmp_path) -> None:
+    answers = tmp_path / "onboarding.json"
+    answers.write_text(
+        json.dumps(
+            {
+                "schedule": {
+                    "frequency": "daily",
+                    "arrival": "morning",
+                    "time": "09:30",
+                    "timezone": "UTC",
+                },
+                "metrics": ["steps"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = create_mcp_server(settings=None, briefing_answers_path=answers)
+
+    tools = {tool.name for tool in asyncio.run(server.list_tools())}
+    assert tools == {"protocol_status", "health_briefing_schedule"}
+
+    schedule = asyncio.run(
+        server.call_tool("health_briefing_schedule", {})
+    ).structured_content
+    assert schedule["configured"] is True
+    assert schedule["fetch_lead_minutes"] == 10
+    assert schedule["recommended_fetch_at"].endswith("09:20:00+00:00")
+    assert schedule["next_briefing_at"].endswith("09:30:00+00:00")
 
 
 def test_storage_enabled_tools_query_propose_and_execute_only_after_owner_approval(tmp_path) -> None:

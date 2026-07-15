@@ -36,6 +36,7 @@ from heavenly_health.cloudflare_managed_oauth import (
 from heavenly_health.launcher import DEFAULT_RUNTIME_ENV
 from heavenly_health.health_storage import HealthStorageError, SupabaseHealthStore, SupabaseSettings
 from heavenly_health import onboarding
+from heavenly_health.briefing import briefing_schedule
 from heavenly_health.onboarding import OnboardingAnswers
 from heavenly_health.providers.common import ProviderConfigurationError
 from heavenly_health.providers.runtime import ProviderRuntime
@@ -65,6 +66,10 @@ provider_app = typer.Typer(
     help="Connect, synchronize, inspect, or disconnect health data providers.",
     no_args_is_help=True,
 )
+schedule_app = typer.Typer(
+    help="Show the briefing schedule a connected agent uses to self-schedule.",
+    no_args_is_help=True,
+)
 google_provider_app = typer.Typer(
     help="Manage the Google Health API v4 connector.",
     no_args_is_help=True,
@@ -87,6 +92,7 @@ app.add_typer(runtime_app, name="runtime")
 app.add_typer(approval_app, name="approval")
 app.add_typer(agent_app, name="agent")
 app.add_typer(provider_app, name="provider")
+app.add_typer(schedule_app, name="schedule")
 provider_app.add_typer(google_provider_app, name="google-health")
 provider_app.add_typer(garmin_provider_app, name="garmin")
 provider_app.add_typer(whoop_provider_app, name="whoop")
@@ -148,6 +154,12 @@ def _provider_output(action: Callable[[], object]) -> None:
 def provider_status() -> None:
     """Show redacted connection and synchronization status."""
     _provider_output(lambda: {"providers": _provider_runtime().statuses()})
+
+
+@schedule_app.command("show")
+def schedule_show() -> None:
+    """Print the agent-facing briefing schedule (delivery time and fetch lead)."""
+    console.print(json.dumps(briefing_schedule(), indent=2, sort_keys=True))
 
 
 @google_provider_app.command("import-client")

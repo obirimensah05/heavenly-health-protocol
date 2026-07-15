@@ -24,6 +24,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware import Middleware
 
 from heavenly_health.approvals import ApprovalStore, approval_state_path
+from heavenly_health.briefing import briefing_schedule
 from heavenly_health.cloudflare_managed_oauth import (
     CloudflareAccessJWTMiddleware,
     CloudflareAccessJWTVerifier,
@@ -184,6 +185,7 @@ def create_mcp_server(
     settings: OAuthRuntimeSettings | None,
     health_store: SupabaseHealthStore | Any | None = None,
     approval_store: ApprovalStore | None = None,
+    briefing_answers_path: Path | None = None,
     oidc_proxy_factory: Callable[..., Any] = OIDCProxy,
     fastmcp_factory: Callable[..., Any] = FastMCP,
 ) -> Any:
@@ -191,12 +193,17 @@ def create_mcp_server(
     kwargs: dict[str, Any] = {
         "name": SERVER_NAME,
         "instructions": (
-            "This is a local-first health protocol MCP server. "
-            "Health reads are bounded by explicit metric and date allowlists. "
-            "Health writes require a separate owner approval through the local CLI."
+            "This is a local-first health protocol MCP server: a bridge to the owner's "
+            "health data, meant to be driven by you, the agent. Health reads are bounded "
+            "by explicit metric and date allowlists. Health writes require a separate "
+            "owner approval through the local CLI. To deliver the owner's briefing, "
+            "self-schedule from health_briefing_schedule: wake at recommended_fetch_at, "
+            "call sync_health_source for each connected source, then query_health_events, "
+            "and present the analysis by next_briefing_at."
             if health_store is not None
-            else "This is a local-first health protocol MCP server. It reports configuration "
-            "status only until the owner explicitly enables a storage adapter."
+            else "This is a local-first health protocol MCP server, a bridge meant to be "
+            "driven by you, the agent. It reports configuration status and the owner's "
+            "briefing schedule (health_briefing_schedule) until the owner enables storage."
         ),
     }
     if settings is not None:
@@ -221,7 +228,12 @@ def create_mcp_server(
             kwargs["auth"] = oidc_proxy_factory(**proxy_kwargs)
     server = fastmcp_factory(**kwargs)
     if hasattr(server, "tool"):
-        _register_protocol_tools(server, health_store=health_store, approval_store=approval_store)
+        _register_protocol_tools(
+            server,
+            health_store=health_store,
+            approval_store=approval_store,
+            briefing_answers_path=briefing_answers_path,
+        )
     return server
 
 
@@ -230,11 +242,24 @@ def _register_protocol_tools(
     *,
     health_store: SupabaseHealthStore | Any | None,
     approval_store: ApprovalStore | None,
+    briefing_answers_path: Path | None = None,
 ) -> None:
     @server.tool(name="protocol_status")
     def _protocol_status() -> dict[str, Any]:
         """Return privacy-safe Heavenly runtime and storage status."""
         return server_info(health_data_exposed=health_store is not None)
+
+    @server.tool(name="health_briefing_schedule")
+    def _health_briefing_schedule() -> dict[str, Any]:
+        """Report when the owner wants their briefing and when an agent should fetch.
+
+        Heavenly never runs the briefing itself. Use this to self-schedule: wake at
+        ``recommended_fetch_at`` (``fetch_lead_minutes`` before delivery), call
+        ``sync_health_source`` then ``query_health_events``, and have the analysis
+        ready by ``next_briefing_at``. Returns ``{"configured": false}`` until the
+        owner completes setup.
+        """
+        return briefing_schedule(briefing_answers_path)
 
     if health_store is None:
         return
