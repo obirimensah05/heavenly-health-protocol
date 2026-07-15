@@ -456,3 +456,141 @@ def test_google_sleep_normalization_and_metric_scope_selection() -> None:
     assert events[0]["value_numeric"] == 480
     assert events[0]["unit"] == "min"
     assert normalize_google_data_point("sleep", {}, allowed_metrics=frozenset({"steps"})) == []
+
+
+def test_google_daily_filter_uses_snake_case_data_type_restriction() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"dataPoints": []})
+
+    api = GoogleHealthAPI(
+        token_provider=lambda: "token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    api.list_data_points(
+        "daily-resting-heart-rate",
+        start="2026-07-08T00:00:00Z",
+        end="2026-07-15T00:00:00Z",
+        limit=10,
+    )
+
+    assert requests[0].url.params["filter"] == (
+        'daily_resting_heart_rate.date >= "2026-07-08"'
+        ' AND daily_resting_heart_rate.date < "2026-07-15"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("data_type", "expected_filter"),
+    [
+        (
+            "daily-resting-heart-rate",
+            'daily_resting_heart_rate.date >= "2026-07-15"'
+            ' AND daily_resting_heart_rate.date < "2026-07-16"',
+        ),
+        (
+            "sleep",
+            'sleep.interval.civil_end_time >= "2026-07-15"'
+            ' AND sleep.interval.civil_end_time < "2026-07-16"',
+        ),
+    ],
+)
+def test_google_date_filters_never_collapse_same_day_windows(
+    data_type: str, expected_filter: str
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"dataPoints": []})
+
+    api = GoogleHealthAPI(
+        token_provider=lambda: "token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    api.list_data_points(
+        data_type,
+        start="2026-07-15T07:13:00Z",
+        end="2026-07-15T08:20:00Z",
+        limit=10,
+    )
+
+    assert requests[0].url.params["filter"] == expected_filter
+
+
+def test_google_connector_keeps_checkpoint_when_budget_truncates_window(
+    tmp_path: Path,
+) -> None:
+    class FakeAPI:
+        def identity(self):
+            return {"healthUserId": "stable-health-user"}
+
+        def list_data_points(self, data_type, *, start, end, limit):
+            return [
+                {
+                    "name": f"users/1/dataTypes/steps/dataPoints/{index}",
+                    "steps": {
+                        "interval": {
+                            "startTime": "2026-07-14T10:00:00Z",
+                            "endTime": "2026-07-14T10:01:00Z",
+                        },
+                        "count": "1",
+                    },
+                }
+                for index in range(limit)
+            ]
+
+    class FakeStore:
+        settings = type("Settings", (), {"allowed_metrics": frozenset({"steps"})})()
+
+        def ingest_provider_resource(self, **kwargs):
+            return len(kwargs["events"])
+
+    state = ProviderStateStore(tmp_path / "state")
+    connector = GoogleHealthConnector(
+        FakeAPI(),
+        FakeStore(),
+        state,
+        data_types=("steps",),
+        clock=lambda: NOW,
+    )
+
+    result = connector.sync(days=7, limit=5)
+
+    assert result["records_processed"] == 5
+    saved = state.load("google_health")
+    assert "steps" not in saved["checkpoints"]
+
+    follow_up = connector.sync(days=7, limit=5)
+    assert follow_up["records_processed"] == 5
+    assert "steps" not in state.load("google_health")["checkpoints"]
+
+
+def test_google_data_types_order_low_volume_summaries_before_samples() -> None:
+    from heavenly_health.providers.google_health import data_types_for_metrics
+
+    ordered = data_types_for_metrics(
+        frozenset(
+            {
+                "steps",
+                "heart_rate",
+                "resting_heart_rate",
+                "heart_rate_variability",
+                "sleep_analysis",
+                "body_mass",
+                "walking_running_distance",
+                "active_energy",
+                "oxygen_saturation",
+                "respiratory_rate",
+                "vo2_max",
+            }
+        )
+    )
+
+    high_volume = {"steps", "heart-rate", "distance", "active-energy-burned", "oxygen-saturation"}
+    first_high_volume = min(ordered.index(item) for item in high_volume if item in ordered)
+    low_volume = [item for item in ordered if item not in high_volume]
+    assert low_volume, "expected summary data types in the plan"
+    assert all(ordered.index(item) < first_high_volume for item in low_volume)

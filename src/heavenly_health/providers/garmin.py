@@ -537,7 +537,10 @@ class GarminHealthConnector:
                     ingest_mode="backfill" if bounded_days > 1 else "live",
                 )
                 records_processed += 1
-            next_checkpoints[resource_type] = _timestamp(now)
+            # A full page means the budget may have truncated the window; advancing
+            # the checkpoint would silently skip the unfetched remainder forever.
+            if len(resources) < remaining:
+                next_checkpoints[resource_type] = _timestamp(now)
         self.state_store.save(
             self.SOURCE,
             {

@@ -37,21 +37,23 @@ GOOGLE_HEALTH_SCOPES = (
     "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
 )
 _GOOGLE_HOSTS = frozenset({"accounts.google.com", "oauth2.googleapis.com"})
+# Ordered so low-volume summaries sync before high-frequency samples; a shared
+# record budget must never let per-second samples starve the daily summaries.
 _DATA_TYPE_METRICS = {
-    "steps": "steps",
-    "heart-rate": "heart_rate",
     "daily-resting-heart-rate": "resting_heart_rate",
-    "heart-rate-variability": "heart_rate_variability",
     "daily-heart-rate-variability": "heart_rate_variability",
+    "daily-oxygen-saturation": "oxygen_saturation",
+    "daily-respiratory-rate": "respiratory_rate",
+    "daily-vo2-max": "vo2_max",
     "sleep": "sleep_analysis",
     "weight": "body_mass",
+    "vo2-max": "vo2_max",
+    "heart-rate-variability": "heart_rate_variability",
+    "steps": "steps",
     "distance": "walking_running_distance",
     "active-energy-burned": "active_energy",
     "oxygen-saturation": "oxygen_saturation",
-    "daily-oxygen-saturation": "oxygen_saturation",
-    "daily-respiratory-rate": "respiratory_rate",
-    "vo2-max": "vo2_max",
-    "daily-vo2-max": "vo2_max",
+    "heart-rate": "heart_rate",
 }
 _INTERVAL_TYPES = frozenset({"steps", "distance", "active-energy-burned"})
 _DAILY_TYPES = frozenset(
@@ -473,7 +475,10 @@ class GoogleHealthConnector:
                     ingest_mode="backfill" if bounded_days > 1 else "live",
                 )
                 records_processed += 1
-            next_checkpoints[data_type] = _timestamp(now)
+            # A full page means the budget may have truncated the window; advancing
+            # the checkpoint would silently skip the unfetched remainder forever.
+            if len(points) < remaining:
+                next_checkpoints[data_type] = _timestamp(now)
         self.state_store.save(
             self.SOURCE,
             {
@@ -648,13 +653,20 @@ def _google_filter(data_type: str, start: str, end: str) -> str:
     if end_at <= start_at or end_at - start_at > timedelta(days=32):
         raise GoogleHealthError("Google Health sync window is invalid")
     snake = data_type.replace("-", "_")
-    if data_type in _DAILY_TYPES:
-        camel = _camel(data_type)
-        return f'{camel}.date >= "{start_at.date().isoformat()}" AND {camel}.date < "{end_at.date().isoformat()}"'
-    if data_type == "sleep":
-        return f'sleep.interval.civil_end_time >= "{start_at.date().isoformat()}" AND sleep.interval.civil_end_time < "{end_at.date().isoformat()}"'
+    if data_type in _DAILY_TYPES or data_type == "sleep":
+        # Date filters use an exclusive upper bound; a window inside one civil day
+        # must still span a whole day or the API rejects the empty range.
+        start_date = start_at.date()
+        end_date = end_at.date() if end_at == _midnight(end_at) else end_at.date() + timedelta(days=1)
+        end_date = max(end_date, start_date + timedelta(days=1))
+        field = f"{snake}.date" if data_type in _DAILY_TYPES else "sleep.interval.civil_end_time"
+        return f'{field} >= "{start_date.isoformat()}" AND {field} < "{end_date.isoformat()}"'
     field = "interval.start_time" if data_type in _INTERVAL_TYPES else "sample_time.physical_time"
     return f'{snake}.{field} >= "{_timestamp(start_at)}" AND {snake}.{field} < "{_timestamp(end_at)}"'
+
+
+def _midnight(value: datetime) -> datetime:
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def _google_source_record_id(data_type: str, point: Mapping[str, Any]) -> str:
