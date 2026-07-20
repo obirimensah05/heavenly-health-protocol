@@ -293,6 +293,11 @@ def _register_protocol_tools(
             limit=limit,
         )
 
+    @server.tool(name="health_daily_state")
+    def _health_daily_state() -> dict[str, Any]:
+        """Return an explainable daily health state from fresh, allowlisted recovery signals."""
+        return health_store.daily_state()
+
     @server.tool(name="health_event_provenance")
     def _health_event_provenance(event_id: str) -> dict[str, Any]:
         """Return source identity and raw-record linkage without exposing raw payloads."""

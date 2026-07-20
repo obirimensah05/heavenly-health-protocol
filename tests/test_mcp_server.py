@@ -384,6 +384,14 @@ class FakeHealthStore:
     def event_provenance(self, event_id):
         return {"id": event_id, "source": "manual"}
 
+    def daily_state(self):
+        return {
+            "status": "ready",
+            "daily_state": "maintain",
+            "primary_action": {"kind": "maintain"},
+            "data_confidence": "high",
+        }
+
     def sync_source(self, source, *, limit):
         return {"source": source, "deliveries_processed": 1, "events_upserted": 2, "limit": limit}
 
@@ -420,6 +428,7 @@ def test_storage_enabled_server_registers_real_tools_but_no_agent_approval_tool(
         "health_connector_status",
         "health_available_metrics",
         "query_health_events",
+        "health_daily_state",
         "health_event_provenance",
         "sync_health_source",
         "propose_health_event_write",
@@ -428,6 +437,23 @@ def test_storage_enabled_server_registers_real_tools_but_no_agent_approval_tool(
         "search_personal_context",
     }
     assert "approve_health_event_write" not in tools
+
+
+def test_storage_enabled_server_exposes_an_explainable_daily_health_state(tmp_path) -> None:
+    server = create_mcp_server(
+        settings=None,
+        health_store=FakeHealthStore(),
+        approval_store=ApprovalStore(tmp_path / "approvals"),
+    )
+
+    state = asyncio.run(server.call_tool("health_daily_state", {})).structured_content
+
+    assert state == {
+        "status": "ready",
+        "daily_state": "maintain",
+        "primary_action": {"kind": "maintain"},
+        "data_confidence": "high",
+    }
 
 
 def test_briefing_schedule_tool_is_available_without_storage(tmp_path) -> None:

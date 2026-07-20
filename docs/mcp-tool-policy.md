@@ -22,6 +22,7 @@ health_briefing_schedule         # non-secret schedule so an agent can self-sche
 health_connector_status
 health_available_metrics
 query_health_events
+health_daily_state            # explainable recovery band + one action; never diagnoses
 health_event_provenance
 search_personal_context          # only when an explicit context relation exists
 sync_health_source               # only a configured, bounded connector
@@ -34,9 +35,11 @@ It is available before storage is enabled so an agent can plan its own wake job:
 fetch a fetch-lead before `next_briefing_at`, then sync and query.
 
 Health queries require an explicit metric allowlist, timezone-aware start/end,
-maximum 31-day window, and maximum 200 rows. Provenance returns source linkage but
-never the raw payload. Context search returns bounded previews from one configured
-relation. No action accepts SQL, arbitrary relation names, projections, or URLs.
+maximum 31-day window, and maximum 200 rows. `health_daily_state` uses only
+fresh, allowlisted recovery signals and a 3–30 day personal baseline. It returns
+an explainable action band or `insufficient_data`; it never diagnoses or invents
+a composite score. Provenance returns source linkage but never the raw payload.
+Context search returns bounded previews from one configured relation. No action accepts SQL, arbitrary relation names, projections, or URLs.
 
 The initial configured health relations are expected to include:
 

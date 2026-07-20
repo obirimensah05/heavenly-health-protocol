@@ -16,6 +16,8 @@ from uuid import UUID
 
 import httpx
 
+from heavenly_health.daily_state import DAILY_STATE_METRICS, evaluate_daily_state
+
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 _FILTER_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _SHA256 = re.compile(r"^[a-fA-F0-9]{64}$")
@@ -186,6 +188,20 @@ class SupabaseHealthStore:
         if not isinstance(rows, list):
             raise HealthStorageError("Supabase returned an unexpected health event response")
         return {"events": rows, "count": len(rows), "bounded": True}
+
+    def daily_state(self) -> dict[str, object]:
+        """Classify fresh recovery signals against a bounded personal baseline."""
+        selected_metrics = tuple(metric for metric in DAILY_STATE_METRICS if metric in self.settings.allowed_metrics)
+        reference = self._clock()
+        if not selected_metrics:
+            return evaluate_daily_state([], now=reference)
+        events = self.query_events(
+            start=_format_timestamp(reference - timedelta(days=30)),
+            end=_format_timestamp(reference),
+            metrics=selected_metrics,
+            limit=200,
+        )["events"]
+        return evaluate_daily_state(events if isinstance(events, list) else [], now=reference)
 
     def available_metrics(self) -> dict[str, Any]:
         rows = self._request_json(
