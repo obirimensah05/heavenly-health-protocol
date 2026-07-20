@@ -70,6 +70,10 @@ schedule_app = typer.Typer(
     help="Show the briefing schedule a connected agent uses to self-schedule.",
     no_args_is_help=True,
 )
+daily_briefing_app = typer.Typer(
+    help="Render the bounded, delivery-ready daily health briefing.",
+    no_args_is_help=True,
+)
 google_provider_app = typer.Typer(
     help="Manage the Google Health API v4 connector.",
     no_args_is_help=True,
@@ -93,6 +97,7 @@ app.add_typer(approval_app, name="approval")
 app.add_typer(agent_app, name="agent")
 app.add_typer(provider_app, name="provider")
 app.add_typer(schedule_app, name="schedule")
+app.add_typer(daily_briefing_app, name="briefing")
 provider_app.add_typer(google_provider_app, name="google-health")
 provider_app.add_typer(garmin_provider_app, name="garmin")
 provider_app.add_typer(whoop_provider_app, name="whoop")
@@ -160,6 +165,17 @@ def provider_status() -> None:
 def schedule_show() -> None:
     """Print the agent-facing briefing schedule (delivery time and fetch lead)."""
     console.print(json.dumps(briefing_schedule(), indent=2, sort_keys=True))
+
+
+@daily_briefing_app.command("today")
+def daily_briefing_today() -> None:
+    """Print the bounded daily action/evidence contract for a delivery agent."""
+    try:
+        briefing = _configured_health_store().daily_briefing()
+    except (ProviderConfigurationError, HealthStorageError, SecretFileError) as error:
+        console.print(f"[red]Daily briefing unavailable: {error}[/red]")
+        raise typer.Exit(code=1) from error
+    console.print(json.dumps(briefing, indent=2, sort_keys=True))
 
 
 @google_provider_app.command("import-client")
