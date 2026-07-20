@@ -175,7 +175,7 @@ def daily_briefing_today() -> None:
     except (ProviderConfigurationError, HealthStorageError, SecretFileError) as error:
         console.print(f"[red]Daily briefing unavailable: {error}[/red]")
         raise typer.Exit(code=1) from error
-    console.print(json.dumps(briefing, indent=2, sort_keys=True))
+    typer.echo(json.dumps(briefing, indent=2, sort_keys=True))
 
 
 @google_provider_app.command("import-client")
