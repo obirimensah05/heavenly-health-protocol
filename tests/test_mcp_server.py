@@ -392,6 +392,13 @@ class FakeHealthStore:
             "data_confidence": "high",
         }
 
+    def daily_briefing(self):
+        return {
+            "status": "ready",
+            "headline": "Maintain your planned movement",
+            "primary_action": {"kind": "maintain"},
+        }
+
     def sync_source(self, source, *, limit):
         return {"source": source, "deliveries_processed": 1, "events_upserted": 2, "limit": limit}
 
@@ -429,6 +436,7 @@ def test_storage_enabled_server_registers_real_tools_but_no_agent_approval_tool(
         "health_available_metrics",
         "query_health_events",
         "health_daily_state",
+        "health_daily_briefing",
         "health_event_provenance",
         "sync_health_source",
         "propose_health_event_write",
@@ -453,6 +461,22 @@ def test_storage_enabled_server_exposes_an_explainable_daily_health_state(tmp_pa
         "daily_state": "maintain",
         "primary_action": {"kind": "maintain"},
         "data_confidence": "high",
+    }
+
+
+def test_storage_enabled_server_exposes_a_delivery_ready_daily_briefing(tmp_path) -> None:
+    server = create_mcp_server(
+        settings=None,
+        health_store=FakeHealthStore(),
+        approval_store=ApprovalStore(tmp_path / "approvals"),
+    )
+
+    briefing = asyncio.run(server.call_tool("health_daily_briefing", {})).structured_content
+
+    assert briefing == {
+        "status": "ready",
+        "headline": "Maintain your planned movement",
+        "primary_action": {"kind": "maintain"},
     }
 
 
