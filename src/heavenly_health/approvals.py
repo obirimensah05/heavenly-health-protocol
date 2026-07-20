@@ -55,6 +55,75 @@ class ApprovalStore:
         self._write_record(record)
         return self._public_record(record)
 
+    def propose_daily_feedback(
+        self,
+        *,
+        daily_state: str,
+        feedback: str,
+        data_through: str | None,
+        ttl: timedelta = timedelta(hours=24),
+    ) -> dict[str, Any]:
+        """Stage a user's outcome signal; local CLI approval makes it learnable.
+
+        This deliberately records no raw health values. An MCP client can propose
+        feedback but cannot mark it as owner-approved.
+        """
+        if daily_state not in {"recover", "maintain"}:
+            raise ValueError("daily_state must be recover or maintain")
+        if feedback not in {"done", "partly", "skipped", "not_useful"}:
+            raise ValueError("feedback must be done, partly, skipped, or not_useful")
+        if ttl <= timedelta(0) or ttl > timedelta(days=7):
+            raise ApprovalError("Proposal lifetime must be between zero and seven days")
+        now = self._aware_now()
+        approval_id = str(uuid4())
+        payload = {
+            "daily_state": daily_state,
+            "feedback": feedback,
+            "reported_at": _timestamp(now),
+            "data_through": data_through,
+        }
+        record: dict[str, Any] = {
+            "approval_id": approval_id,
+            "operation": "record_daily_feedback",
+            "status": "pending",
+            "created_at": _timestamp(now),
+            "expires_at": _timestamp(now + ttl),
+            "preview": {
+                "operation": "record_daily_feedback",
+                "daily_state": daily_state,
+                "feedback": feedback,
+                "data_through": data_through,
+                "confirmation": "Run heavenly approval approve <approval-id> locally",
+            },
+            "payload": payload,
+        }
+        self._write_record(record)
+        return self._public_record(record)
+
+    def feedback_history(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return only locally approved, compact feedback suitable for later learning."""
+        history: list[dict[str, Any]] = []
+        for path in self.root.glob("*.json"):
+            try:
+                record = self._read_record(path.stem)
+            except ApprovalError:
+                continue
+            if record.get("operation") != "record_daily_feedback" or record.get("status") != "approved":
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            history.append(
+                {
+                    "daily_state": payload.get("daily_state"),
+                    "feedback": payload.get("feedback"),
+                    "reported_at": payload.get("reported_at"),
+                    "data_through": payload.get("data_through"),
+                }
+            )
+        history.sort(key=lambda item: str(item.get("reported_at", "")), reverse=True)
+        return history[: max(1, min(int(limit), 200))]
+
     def get(self, approval_id: str) -> dict[str, Any]:
         return self._read_record(approval_id)
 

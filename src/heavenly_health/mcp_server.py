@@ -303,6 +303,25 @@ def _register_protocol_tools(
         """Return a delivery-ready action, evidence, freshness, and feedback options."""
         return health_store.daily_briefing()
 
+    @server.tool(name="propose_daily_briefing_feedback")
+    def _propose_daily_briefing_feedback(feedback: str) -> dict[str, Any]:
+        """Stage one owner-reported outcome; only local CLI approval makes it learnable."""
+        state = health_store.daily_state()
+        if state.get("status") != "ready" or state.get("daily_state") not in {"recover", "maintain"}:
+            raise ValueError("Daily feedback requires a current ready daily state")
+        data_through = state.get("data_through")
+        return approval_store.propose_daily_feedback(
+            daily_state=str(state["daily_state"]),
+            feedback=feedback,
+            data_through=data_through if isinstance(data_through, str) else None,
+        )
+
+    @server.tool(name="health_feedback_history")
+    def _health_feedback_history(limit: int = 50) -> dict[str, Any]:
+        """Return compact outcomes that were explicitly approved through the local CLI."""
+        feedback = approval_store.feedback_history(limit=limit)
+        return {"feedback": feedback, "count": len(feedback)}
+
     @server.tool(name="health_event_provenance")
     def _health_event_provenance(event_id: str) -> dict[str, Any]:
         """Return source identity and raw-record linkage without exposing raw payloads."""
