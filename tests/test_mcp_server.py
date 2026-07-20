@@ -390,6 +390,7 @@ class FakeHealthStore:
             "daily_state": "maintain",
             "primary_action": {"kind": "maintain"},
             "data_confidence": "high",
+            "data_through": "2026-07-20T07:00:00Z",
         }
 
     def daily_briefing(self):
@@ -437,6 +438,8 @@ def test_storage_enabled_server_registers_real_tools_but_no_agent_approval_tool(
         "query_health_events",
         "health_daily_state",
         "health_daily_briefing",
+        "propose_daily_briefing_feedback",
+        "health_feedback_history",
         "health_event_provenance",
         "sync_health_source",
         "propose_health_event_write",
@@ -478,6 +481,30 @@ def test_storage_enabled_server_exposes_a_delivery_ready_daily_briefing(tmp_path
         "headline": "Maintain your planned movement",
         "primary_action": {"kind": "maintain"},
     }
+
+
+def test_daily_briefing_feedback_requires_local_approval_before_it_is_retrievable(tmp_path) -> None:
+    approvals = ApprovalStore(tmp_path / "approvals")
+    server = create_mcp_server(settings=None, health_store=FakeHealthStore(), approval_store=approvals)
+
+    proposal = asyncio.run(
+        server.call_tool("propose_daily_briefing_feedback", {"feedback": "partly"})
+    ).structured_content
+
+    assert proposal is not None
+    assert proposal["status"] == "pending"
+    assert proposal["preview"]["daily_state"] == "maintain"
+    assert asyncio.run(server.call_tool("health_feedback_history", {})).structured_content == {
+        "feedback": [],
+        "count": 0,
+    }
+
+    approvals.approve(str(proposal["approval_id"]))
+
+    history = asyncio.run(server.call_tool("health_feedback_history", {})).structured_content
+    assert history is not None
+    assert history["count"] == 1
+    assert history["feedback"][0]["feedback"] == "partly"
 
 
 def test_briefing_schedule_tool_is_available_without_storage(tmp_path) -> None:

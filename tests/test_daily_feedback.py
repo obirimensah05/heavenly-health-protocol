@@ -34,7 +34,7 @@ def test_daily_feedback_is_pending_until_local_owner_approval_then_becomes_learn
         {
             "daily_state": "recover",
             "feedback": "partly",
-            "reported_at": "2026-07-20T09:30:00+00:00",
+            "reported_at": "2026-07-20T09:30:00Z",
             "data_through": "2026-07-20T07:00:00+00:00",
         }
     ]
