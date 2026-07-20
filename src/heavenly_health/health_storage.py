@@ -16,6 +16,7 @@ from uuid import UUID
 
 import httpx
 
+from heavenly_health.daily_briefing import build_daily_briefing
 from heavenly_health.daily_state import DAILY_STATE_METRICS, evaluate_daily_state
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
@@ -202,6 +203,10 @@ class SupabaseHealthStore:
             limit=200,
         )["events"]
         return evaluate_daily_state(events if isinstance(events, list) else [], now=reference)
+
+    def daily_briefing(self) -> dict[str, object]:
+        """Build the delivery-ready, non-diagnostic briefing from the daily state."""
+        return build_daily_briefing(self.daily_state(), now=self._clock())
 
     def available_metrics(self) -> dict[str, Any]:
         rows = self._request_json(
