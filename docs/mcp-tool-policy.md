@@ -23,6 +23,8 @@ health_connector_status
 health_available_metrics
 query_health_events
 health_daily_state            # explainable recovery band + one action; never diagnoses
+health_daily_briefing         # delivery-ready action, evidence, freshness, uncertainty, feedback choices
+health_feedback_history       # compact outcomes only after local owner approval
 health_event_provenance
 search_personal_context          # only when an explicit context relation exists
 sync_health_source               # only a configured, bounded connector
@@ -38,8 +40,14 @@ Health queries require an explicit metric allowlist, timezone-aware start/end,
 maximum 31-day window, and maximum 200 rows. `health_daily_state` uses only
 fresh, allowlisted recovery signals and a 3–30 day personal baseline. It returns
 an explainable action band or `insufficient_data`; it never diagnoses or invents
-a composite score. Provenance returns source linkage but never the raw payload.
-Context search returns bounded previews from one configured relation. No action accepts SQL, arbitrary relation names, projections, or URLs.
+a composite score. `health_daily_briefing` composes that bounded state into a
+stable delivery contract (headline, one action, evidence, data freshness,
+confidence, and limitations), rather than asking a delivery agent to invent an
+interpretation. Provenance returns source linkage but never the raw payload.
+`health_feedback_history` returns only compact owner-approved outcomes, never
+raw health values or unapproved feedback. Context search returns bounded previews
+from one configured relation. No action accepts SQL, arbitrary relation names,
+projections, or URLs.
 
 The initial configured health relations are expected to include:
 
@@ -56,11 +64,12 @@ The implemented mutation actions are:
 
 ```text
 propose_health_event_write
+propose_daily_briefing_feedback
 execute_approved_health_write
 health_mutation_audit
 ```
 
-A manual insert is always two-channel:
+A manual health insert is always two-channel:
 
 1. MCP validates one allowlisted event and stores an integrity-signed, owner-only
    proposal with a preview and short-lived `approval_id`.
@@ -68,6 +77,12 @@ A manual insert is always two-channel:
    `heavenly approval approve <approval-id>` in a local terminal. MCP has no
    approval tool. Only then can `execute_approved_health_write` idempotently apply
    that exact payload once.
+
+Daily briefing feedback follows the same owner-approval boundary. An MCP client
+may stage exactly one of `done`, `partly`, `skipped`, or `not_useful` against the
+current `recover`/`maintain` state. Local approval makes the compact outcome
+available to `health_feedback_history`; no raw health values are written, and an
+agent cannot self-approve or claim the feedback was stored.
 
 An AI saying that a write seems useful, or inferring consent from earlier discussion, is never approval. `commit_write` must fail for expired, modified, unapproved, or already-consumed approvals.
 

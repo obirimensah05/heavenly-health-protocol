@@ -464,6 +464,7 @@ def test_storage_enabled_server_exposes_an_explainable_daily_health_state(tmp_pa
         "daily_state": "maintain",
         "primary_action": {"kind": "maintain"},
         "data_confidence": "high",
+        "data_through": "2026-07-20T07:00:00Z",
     }
 
 
