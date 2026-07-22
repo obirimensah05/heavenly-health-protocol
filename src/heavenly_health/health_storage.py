@@ -60,6 +60,7 @@ class SupabaseSettings:
     health_table: str
     raw_health_table: str
     allowed_metrics: frozenset[str]
+    health_role_key: str | None = field(default=None, repr=False)
     apple_health_delivery_table: str | None = None
     context_table: str | None = None
     context_id_column: str | None = None
@@ -72,16 +73,12 @@ class SupabaseSettings:
     def from_environ(cls, environ: Mapping[str, str]) -> SupabaseSettings | None:
         url = environ.get("SUPABASE_URL", "").strip()
         key = environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-        if not url and not key:
+        scoped_key = environ.get("SUPABASE_HEALTH_ROLE_KEY", "").strip()
+        if not url and not key and not scoped_key:
             return None
-        missing = [
-            name
-            for name, value in (
-                ("SUPABASE_URL", url),
-                ("SUPABASE_SERVICE_ROLE_KEY", key),
-            )
-            if not value
-        ]
+        missing = [name for name, value in (("SUPABASE_URL", url),) if not value]
+        if not key and not scoped_key:
+            missing.append("SUPABASE_HEALTH_ROLE_KEY or SUPABASE_SERVICE_ROLE_KEY")
         if missing:
             raise HealthStorageError("Incomplete Supabase configuration; missing: " + ", ".join(missing))
         _validate_supabase_origin(url)
@@ -124,6 +121,7 @@ class SupabaseSettings:
             health_table=health_table,
             raw_health_table=raw_table,
             allowed_metrics=metrics,
+            health_role_key=scoped_key or None,
             apple_health_delivery_table=_optional_identifier(
                 "HEAVENLY_APPLE_HEALTH_DELIVERY_TABLE", environ
             ),
@@ -134,6 +132,20 @@ class SupabaseSettings:
             context_search_column=context_names["HEAVENLY_CONTEXT_SEARCH_COLUMN"],
             context_updated_column=context_names["HEAVENLY_CONTEXT_UPDATED_COLUMN"],
         )
+
+    @property
+    def api_key(self) -> str:
+        """Return the narrowest configured PostgREST credential.
+
+        A scoped key is preferred whenever one is present, so that an operator
+        can move off service-role without any other configuration change.
+        """
+        return self.health_role_key or self.service_role_key
+
+    @property
+    def uses_service_role(self) -> bool:
+        """Report whether requests still run with RLS-bypassing service-role rights."""
+        return not self.health_role_key
 
 
 class SupabaseHealthStore:
@@ -287,7 +299,11 @@ class SupabaseHealthStore:
             configured.append(item)
         if self._provider_runtime is not None:
             configured.extend(self._provider_runtime.statuses())
-        return {"storage": "supabase", "configured_connectors": configured}
+        return {
+            "storage": "supabase",
+            "credential_scope": "service_role" if self.settings.uses_service_role else "scoped_role",
+            "configured_connectors": configured,
+        }
 
     def event_provenance(self, event_id: str) -> dict[str, Any]:
         try:
@@ -607,9 +623,10 @@ class SupabaseHealthStore:
         json_body: Any | None = None,
         prefer: str | None = None,
     ) -> Any:
+        credential = self.settings.api_key
         headers = {
-            "apikey": self.settings.service_role_key,
-            "Authorization": f"Bearer {self.settings.service_role_key}",
+            "apikey": credential,
+            "Authorization": f"Bearer {credential}",
             "Accept": "application/json",
         }
         if json_body is not None:

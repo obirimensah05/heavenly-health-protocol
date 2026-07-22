@@ -164,6 +164,7 @@ def test_connector_status_reports_real_freshness_without_returning_health_values
 
     assert result == {
         "storage": "supabase",
+        "credential_scope": "service_role",
         "configured_connectors": [
             {
                 "source": "health_auto_export",
@@ -385,3 +386,50 @@ def test_manual_health_event_validation_never_accepts_synthetic_or_unallowlisted
             unit="count",
             note=None,
         )
+
+
+def test_a_scoped_role_key_is_preferred_over_the_service_role_key() -> None:
+    """An operator can drop project-wide rights without any other config change."""
+    scoped = SupabaseSettings.from_environ(
+        storage_environ(SUPABASE_HEALTH_ROLE_KEY="private-test-scoped-key")
+    )
+    assert scoped is not None
+    assert scoped.api_key == "private-test-scoped-key"
+    assert scoped.uses_service_role is False
+
+    service_role_only = settings()
+    assert service_role_only.api_key == "private-test-service-role-key"
+    assert service_role_only.uses_service_role is True
+
+
+def test_storage_accepts_a_scoped_key_without_any_service_role_key() -> None:
+    configured = SupabaseSettings.from_environ(
+        storage_environ(
+            SUPABASE_SERVICE_ROLE_KEY=None,
+            SUPABASE_HEALTH_ROLE_KEY="private-test-scoped-key",
+        )
+    )
+    assert configured is not None
+    assert configured.api_key == "private-test-scoped-key"
+
+
+def test_the_scoped_credential_is_the_one_actually_sent_to_supabase() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["apikey"])
+        return httpx.Response(200, json=[])
+
+    configured = SupabaseSettings.from_environ(
+        storage_environ(SUPABASE_HEALTH_ROLE_KEY="private-test-scoped-key")
+    )
+    assert configured is not None
+    store = SupabaseHealthStore(
+        configured,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    store.available_metrics()
+
+    assert seen == ["private-test-scoped-key"]
+    assert store.connector_status()["credential_scope"] == "scoped_role"
