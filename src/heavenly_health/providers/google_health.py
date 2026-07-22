@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import secrets
 import time
 from typing import Any, Callable, Mapping, Protocol
@@ -37,6 +38,9 @@ GOOGLE_HEALTH_SCOPES = (
     "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
 )
 _GOOGLE_HOSTS = frozenset({"accounts.google.com", "oauth2.googleapis.com"})
+# Provider-supplied sleep stage names become metric identifiers, so they are
+# constrained here before they can ever reach storage.
+_SLEEP_STAGE = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 # Ordered so low-volume summaries sync before high-frequency samples; a shared
 # record budget must never let per-second samples starve the daily summaries.
 _DATA_TYPE_METRICS = {
@@ -567,22 +571,48 @@ def normalize_google_data_point(
     value, unit = _metric_value(data_type, data)
     if event_at is None or value is None:
         return []
-    return [
-        {
-            "source": "google_health",
-            "metric_type": metric,
-            "event_at": event_at,
-            "value_numeric": value,
-            "value_text": None,
-            "unit": unit,
-            "source_record_id": _google_source_record_id(data_type, point),
-            "metadata": {
-                "schema_version": "1.0",
-                "provider_data_type": data_type,
-            },
-            "is_synthetic": False,
-        }
-    ]
+
+    base_event = {
+        "source": "google_health",
+        "metric_type": metric,
+        "event_at": event_at,
+        "value_numeric": value,
+        "value_text": None,
+        "unit": unit,
+        "source_record_id": _google_source_record_id(data_type, point),
+        "metadata": {
+            "schema_version": "1.0",
+            "provider_data_type": data_type,
+        },
+        "is_synthetic": False,
+    }
+
+    if data_type == "sleep":
+        # Emit the total plus any stage breakdown the owner has explicitly allowlisted.
+        events = [base_event]
+        summary = data.get("summary")
+        stages = summary.get("stagesSummary") if isinstance(summary, Mapping) else None
+        for stage in stages if isinstance(stages, list) else ():
+            if not isinstance(stage, Mapping):
+                continue
+            stage_type = str(stage.get("type", "")).strip().lower()
+            if _SLEEP_STAGE.fullmatch(stage_type) is None:
+                continue
+            stage_metric = f"sleep_{stage_type}"
+            if stage_metric not in allowed_metrics:
+                continue
+            minutes = _number(stage.get("minutes"))
+            if minutes is None:
+                continue
+            stage_event = dict(base_event)
+            stage_event["metric_type"] = stage_metric
+            stage_event["value_numeric"] = minutes
+            stage_event["unit"] = "min"
+            stage_event["source_record_id"] = f"{base_event['source_record_id']}:{stage_type}"
+            events.append(stage_event)
+        return events
+
+    return [base_event]
 
 
 def _metric_value(data_type: str, data: Mapping[str, Any]) -> tuple[float | int | None, str | None]:

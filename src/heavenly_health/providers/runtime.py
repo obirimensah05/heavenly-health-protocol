@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
 from typing import Any, Callable
@@ -19,6 +19,7 @@ from heavenly_health.providers.google_health import (
     GoogleHealthConnector,
     GoogleOAuthClient,
     data_types_for_metrics,
+    normalize_google_data_point,
 )
 from heavenly_health.providers.garmin import (
     GarminHealthAPI,
@@ -292,6 +293,53 @@ class ProviderRuntime:
             raise ProviderConfigurationError("Unsupported provider source")
         connector = self._connector_factory(source, store)
         return connector.sync(limit=max(1, min(int(limit), 10_000)))
+
+    def google_health_events(
+        self,
+        allowed_metrics: frozenset[str],
+        *,
+        days: int = 31,
+        limit: int = 1_000,
+    ) -> list[dict[str, Any]]:
+        """Read bounded, allowlisted Google Health events without writing storage.
+
+        This is the read-only continuity path for a daily briefing when the
+        normalized store is temporarily unreachable.  It deliberately neither
+        writes raw provider records nor advances synchronization checkpoints.
+        """
+        state = self.state_store.load("google_health")
+        if state.get("connected") is not True:
+            raise ProviderConfigurationError("Google Health is not connected")
+        selected_metrics = frozenset({"resting_heart_rate", "heart_rate_variability"}) & allowed_metrics
+        data_types = data_types_for_metrics(selected_metrics)
+        if not data_types:
+            raise ProviderConfigurationError("Google Health recovery metrics are not allowlisted")
+        bounded_days = max(1, min(int(days), 31))
+        bounded_limit = max(1, min(int(limit), 10_000))
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=bounded_days)
+        oauth = GoogleOAuthClient.load(self.secret_store)
+        api = GoogleHealthAPI(oauth.access_token)
+        api.identity()
+        events: list[dict[str, Any]] = []
+        for data_type in data_types:
+            remaining = bounded_limit - len(events)
+            if remaining <= 0:
+                break
+            for point in api.list_data_points(
+                data_type,
+                start=_timestamp(start),
+                end=_timestamp(now),
+                limit=remaining,
+            ):
+                events.extend(
+                    normalize_google_data_point(
+                        data_type,
+                        point,
+                        allowed_metrics=selected_metrics,
+                    )
+                )
+        return events
 
     def _default_connector(self, source: str, store: Any) -> Any:
         if source == "google_health":

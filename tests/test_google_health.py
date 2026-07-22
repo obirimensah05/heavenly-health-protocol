@@ -594,3 +594,47 @@ def test_google_data_types_order_low_volume_summaries_before_samples() -> None:
     low_volume = [item for item in ordered if item not in high_volume]
     assert low_volume, "expected summary data types in the plan"
     assert all(ordered.index(item) < first_high_volume for item in low_volume)
+
+
+def _sleep_point_with_stages() -> dict:
+    return {
+        "name": "users/1/dataTypes/sleep/dataPoints/a",
+        "sleep": {
+            "interval": {
+                "startTime": "2026-07-14T00:00:00Z",
+                "endTime": "2026-07-14T08:00:00Z",
+            },
+            "summary": {
+                "stagesSummary": [
+                    {"type": "DEEP", "minutes": 90},
+                    {"type": "REM", "minutes": 105},
+                    {"type": "../../etc/passwd", "minutes": 5},
+                ]
+            },
+        },
+    }
+
+
+def test_google_sleep_stages_are_emitted_only_when_the_owner_allowlists_them() -> None:
+    events = normalize_google_data_point(
+        "sleep",
+        _sleep_point_with_stages(),
+        allowed_metrics=frozenset({"sleep_analysis", "sleep_deep"}),
+    )
+
+    emitted = {event["metric_type"]: event for event in events}
+    assert set(emitted) == {"sleep_analysis", "sleep_deep"}
+    assert emitted["sleep_deep"]["value_numeric"] == 90
+    assert emitted["sleep_deep"]["unit"] == "min"
+    assert emitted["sleep_deep"]["source_record_id"].endswith(":deep")
+
+
+def test_google_sleep_stage_names_never_become_unvetted_metric_identifiers() -> None:
+    """A provider-supplied stage label must not reach storage as a new metric."""
+    events = normalize_google_data_point(
+        "sleep",
+        _sleep_point_with_stages(),
+        allowed_metrics=frozenset({"sleep_analysis"}),
+    )
+
+    assert [event["metric_type"] for event in events] == ["sleep_analysis"]
