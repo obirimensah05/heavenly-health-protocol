@@ -35,6 +35,8 @@ from heavenly_health.cloudflare_managed_oauth import (
 )
 from heavenly_health.launcher import DEFAULT_RUNTIME_ENV
 from heavenly_health.health_storage import HealthStorageError, SupabaseHealthStore, SupabaseSettings
+from heavenly_health.daily_briefing import build_daily_briefing
+from heavenly_health.daily_state import evaluate_daily_state
 from heavenly_health import onboarding
 from heavenly_health.briefing import briefing_schedule
 from heavenly_health.onboarding import OnboardingAnswers
@@ -48,6 +50,9 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+# Degradation and warning notices go here so they never contaminate the JSON
+# a delivery agent parses from stdout.
+warning_console = Console(stderr=True)
 access_app = typer.Typer(
     help="Manage a preconfigured Cloudflare Access email allowlist.",
     no_args_is_help=True,
@@ -171,10 +176,35 @@ def schedule_show() -> None:
 def daily_briefing_today() -> None:
     """Print the bounded daily action/evidence contract for a delivery agent."""
     try:
-        briefing = _configured_health_store().daily_briefing()
+        store = _configured_health_store()
     except (ProviderConfigurationError, HealthStorageError, SecretFileError) as error:
         console.print(f"[red]Daily briefing unavailable: {error}[/red]")
         raise typer.Exit(code=1) from error
+    try:
+        briefing = store.daily_briefing()
+    except HealthStorageError as storage_error:
+        # Storage is unreachable, so fall back to a direct provider read. The
+        # degradation is never silent: it is announced on stderr and recorded in
+        # the briefing's own data-quality block.
+        warning_console.print(
+            f"[yellow]Normalized storage is unavailable ({storage_error}); "
+            "falling back to a direct Google Health read.[/yellow]"
+        )
+        try:
+            events = _provider_runtime().google_health_events(store.settings.allowed_metrics)
+            briefing = build_daily_briefing(evaluate_daily_state(events))
+            data_quality = dict(briefing["data_quality"])
+            limitations = list(data_quality.get("limitations", []))
+            limitations.append(
+                "Read directly from Google Health API because normalized storage was unavailable."
+            )
+            data_quality["source"] = "google_health_api"
+            data_quality["degraded"] = True
+            data_quality["limitations"] = limitations
+            briefing["data_quality"] = data_quality
+        except (ProviderConfigurationError, HealthStorageError, SecretFileError) as error:
+            console.print(f"[red]Daily briefing unavailable: {error}[/red]")
+            raise typer.Exit(code=1) from error
     typer.echo(json.dumps(briefing, indent=2, sort_keys=True))
 
 
@@ -648,6 +678,16 @@ def access_oauth_configure_runtime(
         help="Owner-only file containing a current Cloudflare Access JWT.",
     ),
     host: str | None = typer.Option(None, "--host", help="Exact protected MCP hostname."),
+    team_domain: str | None = typer.Option(
+        None,
+        "--team-domain",
+        help="Your Cloudflare Access team origin, e.g. https://acme.cloudflareaccess.com.",
+    ),
+    audience: str | None = typer.Option(
+        None,
+        "--audience",
+        help="Your Access application audience tag, taken from the Cloudflare dashboard.",
+    ),
     runtime_file: Path = typer.Option(
         DEFAULT_RUNTIME_ENV,
         "--runtime-file",
@@ -655,11 +695,25 @@ def access_oauth_configure_runtime(
     ),
 ) -> None:
     """Verify an Access JWT and persist its origin trust settings without displaying them."""
+    resolved_team_domain = (
+        team_domain or os.environ.get("HEAVENLY_CLOUDFLARE_TEAM_DOMAIN", "")
+    ).strip()
+    resolved_audience = (
+        audience or os.environ.get("HEAVENLY_CLOUDFLARE_ACCESS_AUDIENCE", "")
+    ).strip()
+    if not resolved_team_domain or not resolved_audience:
+        console.print(
+            "[red]--team-domain and --audience are required. Read both from your own "
+            "Cloudflare Access application; they must not come from the assertion.[/red]"
+        )
+        raise typer.Exit(code=1)
     try:
         destination = configure_runtime_from_access_assertion(
             assertion_file,
             public_host=_managed_oauth_host(host),
             runtime_path=runtime_file,
+            team_domain=resolved_team_domain,
+            audience=resolved_audience,
         )
     except (CloudflareAccessConfigurationError, CloudflareManagedOAuthError) as error:
         console.print(f"[red]{error}[/red]")

@@ -152,7 +152,13 @@ class CloudflareAccessJWTVerifier:
 
 
 class CloudflareAccessJWTMiddleware:
-    """Require a verified Access assertion only for requests forwarded by Cloudflare."""
+    """Require a verified Access assertion for every non-loopback request.
+
+    The only exemption is a request whose real transport peer is a loopback
+    address, which is the local-first path the owner drives from their own
+    machine. Trust is never inferred from the ``Host`` header or from any other
+    caller-supplied value, because those are attacker-controlled at the origin.
+    """
 
     def __init__(self, app: ASGIApp, verifier: CloudflareAccessJWTVerifier) -> None:
         self.app = app
@@ -163,6 +169,7 @@ class CloudflareAccessJWTMiddleware:
             await self.app(scope, receive, send)
             return
         headers = [(name.lower(), value) for name, value in scope.get("headers", [])]
+        remote_peer = not _peer_is_loopback(scope.get("client"))
         public_host = _header_host(headers) == self.verifier.settings.public_host
         cloudflare_forwarded = any(
             name in {b"cf-connecting-ip", b"cf-ray"} for name, _value in headers
@@ -172,7 +179,7 @@ class CloudflareAccessJWTMiddleware:
             for name, value in headers
             if name == b"cf-access-jwt-assertion"
         ]
-        if public_host or cloudflare_forwarded or assertions:
+        if remote_peer or public_host or cloudflare_forwarded or assertions:
             try:
                 if len(assertions) != 1:
                     raise CloudflareManagedOAuthError("Cloudflare Access assertion is missing")
@@ -194,21 +201,42 @@ def configure_runtime_from_access_assertion(
     *,
     public_host: str,
     runtime_path: Path,
+    team_domain: str,
+    audience: str,
     verifier_factory: Callable[
         [CloudflareManagedOAuthSettings], CloudflareAccessJWTVerifier
     ] = CloudflareAccessJWTVerifier,
 ) -> Path:
-    """Verify an existing Access JWT and persist only its origin trust settings."""
+    """Verify an Access JWT against operator-supplied trust and persist it.
+
+    The team domain and audience must be supplied out of band by the operator.
+    They are never derived from the assertion itself: any Cloudflare Access team
+    can mint a well-formed token for its own issuer and audience, so a token that
+    selects the trust anchor it is checked against proves nothing. Only the owner
+    identity is read from the assertion, and only after the signature verifies
+    against the operator's team domain and audience.
+    """
     assertion = _read_private_text(assertion_path).strip()
     claims = _bootstrap_claims(assertion)
+    expected_team_domain = _validated_team_domain(team_domain)
+    if str(claims.get("iss", "")).rstrip("/") != expected_team_domain:
+        raise CloudflareManagedOAuthError(
+            "Cloudflare Access assertion was not issued by the expected team domain"
+        )
     audience_value = claims.get("aud")
-    if isinstance(audience_value, list) and len(audience_value) == 1:
-        audience_value = audience_value[0]
+    if isinstance(audience_value, list):
+        presented_audiences = [item for item in audience_value if isinstance(item, str)]
+    elif isinstance(audience_value, str):
+        presented_audiences = [audience_value]
+    else:
+        presented_audiences = []
+    if audience not in presented_audiences:
+        raise CloudflareManagedOAuthError(
+            "Cloudflare Access assertion does not carry the expected Access audience"
+        )
     environment = {
-        "HEAVENLY_CLOUDFLARE_TEAM_DOMAIN": str(claims.get("iss", "")),
-        "HEAVENLY_CLOUDFLARE_ACCESS_AUDIENCE": (
-            audience_value if isinstance(audience_value, str) else ""
-        ),
+        "HEAVENLY_CLOUDFLARE_TEAM_DOMAIN": expected_team_domain,
+        "HEAVENLY_CLOUDFLARE_ACCESS_AUDIENCE": audience,
         "HEAVENLY_CLOUDFLARE_ALLOWED_EMAILS": str(claims.get("email", "")),
         "HEAVENLY_MCP_PUBLIC_HOST": public_host,
     }
@@ -320,6 +348,24 @@ async def _deny(send: Send, *, websocket: bool) -> None:
         }
     )
     await send({"type": "http.response.body", "body": _DENIED_BODY})
+
+
+def _peer_is_loopback(client: object) -> bool:
+    """Report whether the real transport peer is a loopback address.
+
+    An absent, non-numeric, or unparsable peer is treated as remote so that
+    unusual transports fail closed into requiring a verified assertion.
+    """
+    if not isinstance(client, (tuple, list)) or not client:
+        return False
+    host = str(client[0]).strip()
+    if not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host.split("%", maxsplit=1)[0])
+    except ValueError:
+        return False
+    return address.is_loopback
 
 
 def _header_host(headers: list[tuple[bytes, bytes]]) -> str:

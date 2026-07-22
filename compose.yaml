@@ -11,6 +11,8 @@ services:
       # Reserved durable state path for a separately configured OAuth deployment.
       HEAVENLY_OAUTH_STATE_DIR: /home/heavenly/data/oauth-state
     ports:
+      # Host loopback only. Widening this publishes the health tools to the
+      # network; a remote deployment must go through Cloudflare Access instead.
       - "127.0.0.1:8791:8791"
     read_only: true
     tmpfs:

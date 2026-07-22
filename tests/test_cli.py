@@ -165,8 +165,8 @@ def test_access_oauth_configure_runtime_reports_only_the_destination(tmp_path, m
     runtime.chmod(0o600)
     observed = []
 
-    def configure(assertion_path, *, public_host, runtime_path):
-        observed.append((assertion_path, public_host, runtime_path))
+    def configure(assertion_path, *, public_host, runtime_path, team_domain, audience):
+        observed.append((assertion_path, public_host, runtime_path, team_domain, audience))
         return runtime_path
 
     monkeypatch.setattr(
@@ -186,11 +186,23 @@ def test_access_oauth_configure_runtime_reports_only_the_destination(tmp_path, m
             str(runtime),
             "--host",
             "health-mcp.example.com",
+            "--team-domain",
+            "https://team.cloudflareaccess.com",
+            "--audience",
+            "a" * 64,
         ],
     )
 
     assert result.exit_code == 0
-    assert observed == [(assertion, "health-mcp.example.com", runtime)]
+    assert observed == [
+        (
+            assertion,
+            "health-mcp.example.com",
+            runtime,
+            "https://team.cloudflareaccess.com",
+            "a" * 64,
+        )
+    ]
     assert str(runtime) in "".join(result.stdout.split())
     assert "private-token" not in result.stdout
 
@@ -224,3 +236,37 @@ def test_owner_can_review_and_approve_a_pending_health_mutation_from_cli(tmp_pat
     assert approved.exit_code == 0
     assert "approved" in approved.stdout.lower()
     assert store.get(approval_id)["status"] == "approved"
+
+
+def test_access_oauth_configure_runtime_refuses_to_infer_trust_from_the_assertion(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Without an operator-supplied team domain and audience there is nothing to verify against."""
+    runner = CliRunner()
+    assertion = tmp_path / "access.jwt"
+    assertion.write_text("private-token")
+    assertion.chmod(0o600)
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text("HEAVENLY_TEST=1\n")
+    runtime.chmod(0o600)
+    monkeypatch.delenv("HEAVENLY_CLOUDFLARE_TEAM_DOMAIN", raising=False)
+    monkeypatch.delenv("HEAVENLY_CLOUDFLARE_ACCESS_AUDIENCE", raising=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "access",
+            "oauth",
+            "configure-runtime",
+            "--assertion-file",
+            str(assertion),
+            "--runtime-file",
+            str(runtime),
+            "--host",
+            "health-mcp.example.com",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--team-domain" in result.stdout

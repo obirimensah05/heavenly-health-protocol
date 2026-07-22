@@ -115,7 +115,12 @@ def _client() -> tuple[TestClient, rsa.RSAPrivateKey]:
 
     app = Starlette(routes=[Route("/mcp", status, methods=["GET", "POST"])])
     wrapped = CloudflareAccessJWTMiddleware(app, verifier)
-    return TestClient(wrapped), private_key
+    return TestClient(wrapped, client=("127.0.0.1", 50000)), private_key
+
+
+def _remote_client() -> tuple[TestClient, rsa.RSAPrivateKey]:
+    client, private_key = _client()
+    return TestClient(client.app, client=("203.0.113.9", 50000)), private_key
 
 
 def test_loopback_requests_remain_available_without_cloudflare_headers() -> None:
@@ -190,6 +195,8 @@ def test_verified_access_assertion_bootstraps_protected_runtime_settings(tmp_pat
         assertion,
         public_host=PUBLIC_HOST,
         runtime_path=runtime,
+        team_domain=TEAM_DOMAIN,
+        audience=AUDIENCE,
         verifier_factory=lambda settings: CloudflareAccessJWTVerifier(
             settings,
             signing_key_resolver=lambda _token: private_key.public_key(),
@@ -205,3 +212,69 @@ def test_verified_access_assertion_bootstraps_protected_runtime_settings(tmp_pat
     assert f'HEAVENLY_CLOUDFLARE_ALLOWED_EMAILS="{OWNER_EMAIL}"' in contents
     assert f'HEAVENLY_MCP_PUBLIC_HOST="{PUBLIC_HOST}"' in contents
     assert runtime.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_non_loopback_peer_always_requires_a_verified_assertion() -> None:
+    """A caller reaching the origin directly cannot opt out by hiding its Host."""
+    client, private_key = _remote_client()
+
+    spoofed_loopback_host = client.get(
+        "http://127.0.0.1:8791/mcp",
+        headers={"Host": "127.0.0.1:8791"},
+    )
+    no_headers_at_all = client.get("http://health-mcp.internal/mcp")
+    verified = client.get(
+        "http://127.0.0.1:8791/mcp",
+        headers={"Cf-Access-Jwt-Assertion": _signed_token(private_key)},
+    )
+
+    assert spoofed_loopback_host.status_code == 403
+    assert no_headers_at_all.status_code == 403
+    assert verified.status_code == 200
+
+
+def test_bootstrap_rejects_an_assertion_from_another_access_team(tmp_path) -> None:
+    """A token must not be allowed to nominate the trust anchor it is checked against."""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    assertion = tmp_path / "access.jwt"
+    assertion.write_text(_signed_token(private_key, issuer="https://attacker.cloudflareaccess.com"))
+    assertion.chmod(0o600)
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text("SUPABASE_URL=https://private.example\n")
+    runtime.chmod(0o600)
+
+    with pytest.raises(CloudflareManagedOAuthError, match="expected team domain"):
+        configure_runtime_from_access_assertion(
+            assertion,
+            public_host=PUBLIC_HOST,
+            runtime_path=runtime,
+            team_domain=TEAM_DOMAIN,
+            audience=AUDIENCE,
+            verifier_factory=lambda settings: CloudflareAccessJWTVerifier(
+                settings,
+                signing_key_resolver=lambda _token: private_key.public_key(),
+            ),
+        )
+
+
+def test_bootstrap_rejects_an_assertion_for_another_access_audience(tmp_path) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    assertion = tmp_path / "access.jwt"
+    assertion.write_text(_signed_token(private_key, audience="b" * 64))
+    assertion.chmod(0o600)
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text("SUPABASE_URL=https://private.example\n")
+    runtime.chmod(0o600)
+
+    with pytest.raises(CloudflareManagedOAuthError, match="expected Access audience"):
+        configure_runtime_from_access_assertion(
+            assertion,
+            public_host=PUBLIC_HOST,
+            runtime_path=runtime,
+            team_domain=TEAM_DOMAIN,
+            audience=AUDIENCE,
+            verifier_factory=lambda settings: CloudflareAccessJWTVerifier(
+                settings,
+                signing_key_resolver=lambda _token: private_key.public_key(),
+            ),
+        )
