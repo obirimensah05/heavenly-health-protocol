@@ -107,3 +107,53 @@ def test_audit_history_is_bounded_and_excludes_mutation_payloads(tmp_path) -> No
     assert history[0]["status"] == "pending"
     assert history[0]["preview"] == {"value": "55 bpm"}
     assert "payload" not in history[0]
+
+
+def test_pending_proposals_are_capped_so_an_agent_cannot_bury_the_owner(tmp_path) -> None:
+    """Proposing is the one unattended write, so it needs a ceiling."""
+    from heavenly_health import approvals
+
+    monkey_limit = 3
+    original = approvals._MAX_PENDING_PROPOSALS
+    approvals._MAX_PENDING_PROPOSALS = monkey_limit
+    try:
+        store = ApprovalStore(tmp_path / "approvals")
+        for _ in range(monkey_limit):
+            store.propose_daily_feedback(
+                daily_state="recover",
+                feedback="done",
+                data_through=None,
+            )
+
+        with pytest.raises(ApprovalError, match="awaiting owner review"):
+            store.propose_daily_feedback(
+                daily_state="recover",
+                feedback="done",
+                data_through=None,
+            )
+    finally:
+        approvals._MAX_PENDING_PROPOSALS = original
+
+
+def test_deciding_a_proposal_frees_capacity_again(tmp_path) -> None:
+    from heavenly_health import approvals
+
+    original = approvals._MAX_PENDING_PROPOSALS
+    approvals._MAX_PENDING_PROPOSALS = 2
+    try:
+        store = ApprovalStore(tmp_path / "approvals")
+        first = store.propose_daily_feedback(
+            daily_state="recover", feedback="done", data_through=None
+        )
+        store.propose_daily_feedback(
+            daily_state="recover", feedback="done", data_through=None
+        )
+        store.reject(first["approval_id"])
+
+        accepted = store.propose_daily_feedback(
+            daily_state="recover", feedback="done", data_through=None
+        )
+
+        assert accepted["status"] == "pending"
+    finally:
+        approvals._MAX_PENDING_PROPOSALS = original

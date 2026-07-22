@@ -14,6 +14,9 @@ from typing import Any, Callable, Mapping
 from uuid import UUID, uuid4
 
 
+_MAX_PENDING_PROPOSALS = 200
+
+
 class ApprovalError(RuntimeError):
     """An approval record is absent, invalid, expired, or in the wrong state."""
 
@@ -41,6 +44,7 @@ class ApprovalStore:
     ) -> dict[str, Any]:
         if ttl <= timedelta(0) or ttl > timedelta(days=7):
             raise ApprovalError("Proposal lifetime must be between zero and seven days")
+        self._require_proposal_capacity()
         now = self._aware_now()
         approval_id = str(uuid4())
         record: dict[str, Any] = {
@@ -74,6 +78,7 @@ class ApprovalStore:
             raise ValueError("feedback must be done, partly, skipped, or not_useful")
         if ttl <= timedelta(0) or ttl > timedelta(days=7):
             raise ApprovalError("Proposal lifetime must be between zero and seven days")
+        self._require_proposal_capacity()
         now = self._aware_now()
         approval_id = str(uuid4())
         payload = {
@@ -203,6 +208,31 @@ class ApprovalStore:
             records.append(self._public_record(record))
         records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
         return records[: max(1, min(int(limit), 200))]
+
+    def _require_proposal_capacity(self) -> None:
+        """Bound how many unreviewed proposals a caller can accumulate.
+
+        Proposing is the one write an unattended agent can perform on its own, so
+        without a ceiling it can fill the owner's disk and bury real proposals.
+        Expired records do not count; they no longer need a decision.
+        """
+        pending = 0
+        for path in self.root.glob("*.json"):
+            try:
+                record = self._read_record(path.stem)
+            except ApprovalError:
+                continue
+            if record.get("status") != "pending":
+                continue
+            try:
+                self._require_not_expired(record)
+            except ApprovalError:
+                continue
+            pending += 1
+            if pending >= _MAX_PENDING_PROPOSALS:
+                raise ApprovalError(
+                    "Too many proposals are awaiting owner review; approve or reject some first"
+                )
 
     def _prepare_root(self) -> None:
         if self.root.is_symlink():

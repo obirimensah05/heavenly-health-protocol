@@ -455,9 +455,39 @@ mcp = create_mcp_server(
 )
 
 
+def validated_bind_host(host: str, *, authenticated: bool) -> str:
+    """Refuse a non-loopback listener unless an authentication mode is configured.
+
+    Container images bind 0.0.0.0 by necessity, and that is safe only while the
+    published port stays on host loopback. Without an OAuth mode there is nothing
+    in front of the tools, so a reachable listener would be an open health-data
+    endpoint; fail at startup rather than serve one.
+    """
+    candidate = host.strip()
+    if authenticated:
+        return candidate
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        if candidate in {"localhost", ""}:
+            return candidate or DEFAULT_HOST
+        raise OAuthSettingsError(
+            f"HEAVENLY_MCP_HOST={candidate!r} is not loopback and no OAuth mode is configured"
+        ) from None
+    if not address.is_loopback and not address.is_unspecified:
+        raise OAuthSettingsError(
+            f"HEAVENLY_MCP_HOST={candidate!r} is not loopback and no OAuth mode is configured"
+        )
+    return candidate
+
+
 def run() -> None:
     """Serve Streamable HTTP MCP locally at http://127.0.0.1:8791/mcp by default."""
     security = public_transport_security(os.environ.get("HEAVENLY_MCP_PUBLIC_HOST"))
+    host = validated_bind_host(
+        os.environ.get("HEAVENLY_MCP_HOST", DEFAULT_HOST),
+        authenticated=_oauth_settings is not None or _managed_access_verifier is not None,
+    )
     middleware = (
         [Middleware(CloudflareAccessJWTMiddleware, verifier=_managed_access_verifier)]
         if _managed_access_verifier is not None
@@ -465,7 +495,7 @@ def run() -> None:
     )
     mcp.run(
         transport="streamable-http",
-        host=os.environ.get("HEAVENLY_MCP_HOST", DEFAULT_HOST),
+        host=host,
         port=int(os.environ.get("HEAVENLY_MCP_PORT", str(DEFAULT_PORT))),
         path="/mcp",
         middleware=middleware,

@@ -25,6 +25,7 @@ from heavenly_health.mcp_server import (
     resolve_auth_modes,
     server_info,
     validate_cloudflare_oidc_metadata,
+    validated_bind_host,
 )
 from heavenly_health.oauth_runtime import OAuthRuntimeSettings, OAuthSettingsError
 
@@ -588,3 +589,22 @@ def test_storage_enabled_tools_query_propose_and_execute_only_after_owner_approv
         "status": "executed",
         "event_id": "00000000-0000-4000-8000-000000000099",
     }
+
+
+def test_an_unauthenticated_server_refuses_to_bind_a_reachable_address() -> None:
+    """Without an OAuth mode there is nothing in front of the health tools."""
+    for reachable in ("192.168.1.20", "203.0.113.9", "::1234"):
+        with pytest.raises(OAuthSettingsError, match="no OAuth mode is configured"):
+            validated_bind_host(reachable, authenticated=False)
+
+
+def test_loopback_and_container_defaults_still_bind_without_oauth() -> None:
+    assert validated_bind_host("127.0.0.1", authenticated=False) == "127.0.0.1"
+    assert validated_bind_host("::1", authenticated=False) == "::1"
+    assert validated_bind_host("localhost", authenticated=False) == "localhost"
+    # Container images bind 0.0.0.0 and rely on a loopback-only published port.
+    assert validated_bind_host("0.0.0.0", authenticated=False) == "0.0.0.0"
+
+
+def test_an_authenticated_server_may_bind_a_reachable_address() -> None:
+    assert validated_bind_host("203.0.113.9", authenticated=True) == "203.0.113.9"
