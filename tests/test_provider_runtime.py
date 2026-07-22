@@ -62,7 +62,7 @@ def _resting_heart_rate_point(name: str, value: int) -> dict[str, Any]:
 
 def install_fake_google(monkeypatch, api: FakeGoogleAPI) -> None:
     class FakeOAuthClient:
-        access_token = "private-test-access-token"
+        access_token = "fake-token"  # deliberately short: not secret-shaped
 
         @classmethod
         def load(cls, _secret_store):
@@ -209,7 +209,7 @@ class FakeOAuth:
     def __init__(self, *, remote_revocation: bool = True) -> None:
         self.revoked = False
         self._remote_revocation = remote_revocation
-        self.access_token = "private-test-access-token"
+        self.access_token = "fake-token"
         self.credentials = object()
 
     @classmethod
