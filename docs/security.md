@@ -30,9 +30,40 @@ Cloudflare Managed OAuth terminates the client authorization-code flow at Access
 and forwards `Cf-Access-Jwt-Assertion` to Heavenly. The origin validates the
 RS256 signature against the configured team JWKS, issuer, application audience,
 required time/subject/type claims, and an exact normalized owner-email allowlist.
-Public or Cloudflare-forwarded requests without one valid assertion receive a
-generic `403`; loopback-native MCP remains available. Managed OAuth and the
-legacy FastMCP OIDC proxy cannot be enabled together.
+Managed OAuth and the legacy FastMCP OIDC proxy cannot be enabled together.
+
+The exemption for local use is decided by the real transport peer, taken from the
+ASGI connection scope, never from the `Host` header or any other caller-supplied
+value. A request whose peer is not a loopback address must present one valid
+assertion or receive a generic `403`, so reaching the origin port directly does
+not bypass Access. An absent or unparsable peer is treated as remote. Requests
+that do carry Cloudflare headers or an assertion are always verified, even from
+loopback, so a spoofed `Cf-Connecting-Ip` cannot downgrade the check.
+
+Bootstrapping origin trust (`heavenly access oauth configure-runtime`) requires
+`--team-domain` and `--audience` from your own Cloudflare dashboard. These are
+never read out of the assertion: any Access team can mint a well-formed token for
+its own issuer and audience, so a token that selects the anchor it is verified
+against proves nothing. The assertion supplies only the owner identity, and only
+after its signature verifies against the operator-supplied anchor.
+
+Without an OAuth mode configured, the server refuses to bind a reachable address.
+Loopback and the container's `0.0.0.0` (which relies on a loopback-only published
+port) are the only accepted binds.
+
+## Database privilege
+
+`sql/003_least_privilege.sql` forces row level security on both health tables,
+revokes their `anon`/`authenticated` grants, closes the schema's default
+privileges so later tables start closed, and creates the `heavenly_health_app`
+role holding rights on those two tables only.
+
+Prefer `SUPABASE_HEALTH_ROLE_KEY`, a PostgREST JWT whose `role` claim is
+`heavenly_health_app`, over `SUPABASE_SERVICE_ROLE_KEY`. Service-role carries
+`BYPASSRLS` and project-wide rights, so no policy constrains a process holding
+it; the table allowlist would be enforced only in application code. Whichever key
+is configured, `health_connector_status` reports `credential_scope` so the
+current privilege level is visible rather than assumed.
 
 ## Default-deny sensitive data
 

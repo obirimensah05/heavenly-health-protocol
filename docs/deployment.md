@@ -132,8 +132,17 @@ To bootstrap from a current owner Access JWT without displaying its claims:
 ```bash
 heavenly access oauth configure-runtime \
   --assertion-file /private/path/access.jwt \
-  --host health-mcp.example.com
+  --host health-mcp.example.com \
+  --team-domain https://team.cloudflareaccess.com \
+  --audience <application AUD tag>
 ```
+
+`--team-domain` and `--audience` come from your own Cloudflare dashboard and are
+required. They are deliberately not read from the assertion: any Access team can
+mint a valid token for its own issuer and audience, so a token that nominates the
+anchor it is checked against proves nothing about who owns this origin. The
+assertion supplies only the owner identity, after its signature verifies against
+your anchor.
 
 The JWT and runtime file must be absolute, regular, owner-only files. Heavenly
 verifies the JWT against Cloudflare before atomically updating the existing
@@ -178,6 +187,15 @@ FastMCP host/origin protection is enabled in every HTTP mode.
 `HEAVENLY_MCP_PUBLIC_HOST` accepts only a public fully-qualified DNS hostname,
 not a URL, IP literal, localhost, port, path, or single-label name.
 
+### Reaching the origin directly
+
+Access enforcement keys off the real transport peer, not the `Host` header, so a
+caller that reaches the origin port directly still needs a valid assertion. Keep
+the published port on host loopback anyway (`127.0.0.1:8791:8791`, as shipped in
+`compose.yaml`) so the tunnel stays the only network path. Without an OAuth mode
+configured the server refuses to bind anything but loopback or the container's
+`0.0.0.0`, and will exit at startup rather than serve unauthenticated tools.
+
 ### Required production checks
 
 Before publishing a remote health MCP endpoint:
@@ -191,5 +209,8 @@ Before publishing a remote health MCP endpoint:
 5. Without storage configuration, only `protocol_status` is exposed. With storage
    configured, verify the exact allowlist, 31-day maximum query window, 200-row
    maximum, raw-payload exclusion, and CLI-only mutation approval.
+   Apply `sql/003_least_privilege.sql` and confirm `health_connector_status`
+   reports `"credential_scope": "scoped_role"`. A `service_role` scope there means
+   the process still holds project-wide database rights.
 6. Verify the unauthenticated `401` metadata flow, then complete dynamic client
    registration/browser authorization and call a tool with a fresh MCP client.
