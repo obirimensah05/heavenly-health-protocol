@@ -61,6 +61,7 @@ class SupabaseSettings:
     raw_health_table: str
     allowed_metrics: frozenset[str]
     health_role_key: str | None = field(default=None, repr=False)
+    publishable_key: str | None = field(default=None, repr=False)
     apple_health_delivery_table: str | None = None
     context_table: str | None = None
     context_id_column: str | None = None
@@ -74,6 +75,10 @@ class SupabaseSettings:
         url = environ.get("SUPABASE_URL", "").strip()
         key = environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         scoped_key = environ.get("SUPABASE_HEALTH_ROLE_KEY", "").strip()
+        publishable_key = (
+            environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
+            or environ.get("SUPABASE_ANON_KEY", "").strip()
+        )
         if not url and not key and not scoped_key:
             return None
         missing = [name for name, value in (("SUPABASE_URL", url),) if not value]
@@ -81,6 +86,15 @@ class SupabaseSettings:
             missing.append("SUPABASE_HEALTH_ROLE_KEY or SUPABASE_SERVICE_ROLE_KEY")
         if missing:
             raise HealthStorageError("Incomplete Supabase configuration; missing: " + ", ".join(missing))
+        if scoped_key and not publishable_key:
+            # Supabase validates `apikey` against the project's registered keys and
+            # reads the role from `Authorization`. A minted role token is not a
+            # registered key, so on its own every request fails as "Invalid API key"
+            # before RLS is ever consulted.
+            raise HealthStorageError(
+                "SUPABASE_HEALTH_ROLE_KEY also requires SUPABASE_PUBLISHABLE_KEY "
+                "(or SUPABASE_ANON_KEY) to identify the project"
+            )
         _validate_supabase_origin(url)
 
         health_table = _validated_identifier(
@@ -122,6 +136,7 @@ class SupabaseSettings:
             raw_health_table=raw_table,
             allowed_metrics=metrics,
             health_role_key=scoped_key or None,
+            publishable_key=publishable_key or None,
             apple_health_delivery_table=_optional_identifier(
                 "HEAVENLY_APPLE_HEALTH_DELIVERY_TABLE", environ
             ),
@@ -134,11 +149,23 @@ class SupabaseSettings:
         )
 
     @property
-    def api_key(self) -> str:
-        """Return the narrowest configured PostgREST credential.
+    def gateway_key(self) -> str:
+        """Return the registered project key for the `apikey` header.
 
-        A scoped key is preferred whenever one is present, so that an operator
-        can move off service-role without any other configuration change.
+        This header identifies the project to Supabase's gateway; it does not
+        select a database role. Service-role doubles as both, but a scoped
+        deployment must present the publishable key here.
+        """
+        if self.health_role_key:
+            return self.publishable_key or ""
+        return self.service_role_key
+
+    @property
+    def bearer_token(self) -> str:
+        """Return the credential that selects the database role.
+
+        The scoped role token is preferred whenever one is configured, so an
+        operator moves off service-role by setting two values.
         """
         return self.health_role_key or self.service_role_key
 
@@ -623,10 +650,9 @@ class SupabaseHealthStore:
         json_body: Any | None = None,
         prefer: str | None = None,
     ) -> Any:
-        credential = self.settings.api_key
         headers = {
-            "apikey": credential,
-            "Authorization": f"Bearer {credential}",
+            "apikey": self.settings.gateway_key,
+            "Authorization": f"Bearer {self.settings.bearer_token}",
             "Accept": "application/json",
         }
         if json_body is not None:

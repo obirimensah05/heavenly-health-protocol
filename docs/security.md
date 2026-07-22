@@ -59,7 +59,12 @@ privileges so later tables start closed, and creates the `heavenly_health_app`
 role holding rights on those two tables only.
 
 Prefer `SUPABASE_HEALTH_ROLE_KEY`, a PostgREST JWT whose `role` claim is
-`heavenly_health_app`, over `SUPABASE_SERVICE_ROLE_KEY`. Service-role carries
+`heavenly_health_app`, over `SUPABASE_SERVICE_ROLE_KEY`. It must be paired with
+`SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_ANON_KEY`): Supabase validates the
+`apikey` header against the project's registered keys and reads the role from
+`Authorization`, so a minted role token sent as `apikey` fails every request as
+`Invalid API key` before RLS is consulted. Service-role happens to satisfy both
+headers, which is exactly why the split is easy to miss. Service-role carries
 `BYPASSRLS` and project-wide rights, so no policy constrains a process holding
 it; the table allowlist would be enforced only in application code. Whichever key
 is configured, `health_connector_status` reports `credential_scope` so the

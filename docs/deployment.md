@@ -209,8 +209,12 @@ Before publishing a remote health MCP endpoint:
 5. Without storage configuration, only `protocol_status` is exposed. With storage
    configured, verify the exact allowlist, 31-day maximum query window, 200-row
    maximum, raw-payload exclusion, and CLI-only mutation approval.
-   Apply `sql/003_least_privilege.sql` and confirm `health_connector_status`
-   reports `"credential_scope": "scoped_role"`. A `service_role` scope there means
-   the process still holds project-wide database rights.
+   Apply `sql/003_least_privilege.sql`, then set `SUPABASE_HEALTH_ROLE_KEY`
+   (`supabase gen bearer-jwt --role heavenly_health_app`) together with
+   `SUPABASE_PUBLISHABLE_KEY`, and remove the service-role key. Confirm
+   `health_connector_status` reports `"credential_scope": "scoped_role"`. A
+   `service_role` scope there means the process still holds project-wide rights.
+   Verify the scoping by reading a non-health table with the same token: it must
+   fail, not return rows.
 6. Verify the unauthenticated `401` metadata flow, then complete dynamic client
    registration/browser authorization and call a tool with a fresh MCP client.

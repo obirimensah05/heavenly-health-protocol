@@ -388,41 +388,64 @@ def test_manual_health_event_validation_never_accepts_synthetic_or_unallowlisted
         )
 
 
-def test_a_scoped_role_key_is_preferred_over_the_service_role_key() -> None:
-    """An operator can drop project-wide rights without any other config change."""
-    scoped = SupabaseSettings.from_environ(
-        storage_environ(SUPABASE_HEALTH_ROLE_KEY="private-test-scoped-key")
+def scoped_environ(**overrides: str) -> dict[str, str]:
+    return storage_environ(
+        SUPABASE_HEALTH_ROLE_KEY="scoped-role-token",
+        SUPABASE_PUBLISHABLE_KEY="project-publishable",
+        **overrides,
     )
+
+
+def test_a_scoped_role_token_replaces_service_role_on_the_authorization_header() -> None:
+    """An operator drops project-wide rights by setting two values."""
+    scoped = SupabaseSettings.from_environ(scoped_environ())
     assert scoped is not None
-    assert scoped.api_key == "private-test-scoped-key"
+    assert scoped.bearer_token == "scoped-role-token"
+    assert scoped.gateway_key == "project-publishable"
     assert scoped.uses_service_role is False
 
     service_role_only = settings()
-    assert service_role_only.api_key == "private-test-service-role-key"
+    assert service_role_only.bearer_token == "private-test-service-role-key"
+    assert service_role_only.gateway_key == "private-test-service-role-key"
     assert service_role_only.uses_service_role is True
 
 
-def test_storage_accepts_a_scoped_key_without_any_service_role_key() -> None:
+def test_storage_accepts_a_scoped_token_without_any_service_role_key() -> None:
+    configured = SupabaseSettings.from_environ(
+        scoped_environ(SUPABASE_SERVICE_ROLE_KEY=None)
+    )
+    assert configured is not None
+    assert configured.bearer_token == "scoped-role-token"
+
+
+def test_a_scoped_token_alone_is_rejected_because_it_cannot_identify_the_project() -> None:
+    """Supabase validates `apikey` against registered keys; a minted token is not one."""
+    with pytest.raises(HealthStorageError, match="SUPABASE_PUBLISHABLE_KEY"):
+        SupabaseSettings.from_environ(
+            storage_environ(SUPABASE_HEALTH_ROLE_KEY="scoped-role-token")
+        )
+
+
+def test_the_anon_key_is_accepted_as_the_project_identifier() -> None:
     configured = SupabaseSettings.from_environ(
         storage_environ(
-            SUPABASE_SERVICE_ROLE_KEY=None,
-            SUPABASE_HEALTH_ROLE_KEY="private-test-scoped-key",
+            SUPABASE_HEALTH_ROLE_KEY="scoped-role-token",
+            SUPABASE_ANON_KEY="project-anon",
         )
     )
     assert configured is not None
-    assert configured.api_key == "private-test-scoped-key"
+    assert configured.gateway_key == "project-anon"
 
 
-def test_the_scoped_credential_is_the_one_actually_sent_to_supabase() -> None:
-    seen: list[str] = []
+def test_the_project_key_and_the_role_token_are_sent_on_separate_headers() -> None:
+    """Sending the role token as `apikey` fails every request as Invalid API key."""
+    seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.headers["apikey"])
+        seen.append((request.headers["apikey"], request.headers["Authorization"]))
         return httpx.Response(200, json=[])
 
-    configured = SupabaseSettings.from_environ(
-        storage_environ(SUPABASE_HEALTH_ROLE_KEY="private-test-scoped-key")
-    )
+    configured = SupabaseSettings.from_environ(scoped_environ())
     assert configured is not None
     store = SupabaseHealthStore(
         configured,
@@ -431,5 +454,5 @@ def test_the_scoped_credential_is_the_one_actually_sent_to_supabase() -> None:
 
     store.available_metrics()
 
-    assert seen == ["private-test-scoped-key"]
+    assert seen == [("project-publishable", "Bearer scoped-role-token")]
     assert store.connector_status()["credential_scope"] == "scoped_role"
