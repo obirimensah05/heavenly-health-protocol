@@ -112,3 +112,27 @@ def test_rejects_include_cycles(tmp_path) -> None:
 
     with pytest.raises(SecretFileError, match="cycle"):
         load_runtime_environment(first, environ={})
+
+
+def test_every_supabase_credential_the_storage_layer_reads_is_importable(tmp_path) -> None:
+    """A name missing here is dropped silently and storage looks unconfigured."""
+    from heavenly_health.health_storage import SupabaseSettings
+
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text(
+        "SUPABASE_URL=https://project.supabase.co\n"
+        "SUPABASE_HEALTH_ROLE_KEY=scoped-role-token\n"
+        "SUPABASE_PUBLISHABLE_KEY=project-publishable\n"
+        "SUPABASE_ANON_KEY=project-anon\n"
+        "HEAVENLY_ALLOWED_METRICS=steps\n"
+    )
+    runtime.chmod(0o600)
+    environ: dict[str, str] = {}
+
+    load_runtime_environment(runtime, environ=environ)
+    settings = SupabaseSettings.from_environ(environ)
+
+    assert settings is not None
+    assert settings.bearer_token == "scoped-role-token"
+    assert settings.gateway_key == "project-publishable"
+    assert settings.uses_service_role is False

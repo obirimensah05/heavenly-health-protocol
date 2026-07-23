@@ -11,7 +11,15 @@ from typing import MutableMapping
 
 _ASSIGNMENT = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 _INLINE_COMMENT = re.compile(r"\s+#.*$")
-_DIRECT_SECRET_NAMES = frozenset({"SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"})
+_DIRECT_SECRET_NAMES = frozenset(
+    {
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_HEALTH_ROLE_KEY",
+        "SUPABASE_PUBLISHABLE_KEY",
+        "SUPABASE_ANON_KEY",
+    }
+)
 _INCLUDE_NAME = "HEAVENLY_SECRET_FILES"
 _MAX_SECRET_FILE_BYTES = 64 * 1024
 _MAX_INCLUDE_DEPTH = 8
